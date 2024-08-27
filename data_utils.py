@@ -4,10 +4,137 @@ from PIL import Image
 import torch
 from torch.utils.data.sampler import Sampler
 from torchvision import transforms, datasets
-
+import csv
+import os
 from dataset.tinyimagenet import TinyImagenet
 
+from collections import Counter
+import copy
+import math
+import random
+import numpy as np
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from collections import Counter
 
+def count_digits_in_chunks(filename, cls=10,chunk_size=50):
+    df = pd.read_csv(filename, header=None)
+    
+    data = df[0].astype(int).values
+    
+    num_chunks = len(data) // chunk_size
+    if len(data) % chunk_size != 0:
+        num_chunks += 1
+    
+    digit_counts = {i: [] for i in range(cls)}
+    
+    for i in range(num_chunks):
+        start_index = i * chunk_size
+        end_index = min((i + 1) * chunk_size, len(data))
+        chunk = data[start_index:end_index]
+        
+        counts = Counter(chunk)
+        
+        for digit in range(cls):
+            digit_counts[digit].append(counts.get(digit, 0))
+    
+    return digit_counts, num_chunks
+
+def plot_digit_statistics(filename,plot_dir, cls=10,chunk_size=1000):
+    digit_counts, num_chunks = count_digits_in_chunks(filename,cls, chunk_size)
+    
+    x = np.arange(num_chunks)
+    
+    plt.figure(figsize=(12, 8))
+    for digit in range(cls):
+        plt.plot(x, digit_counts[digit], label=f'class {digit}')
+    
+    plt.xlabel('sampling timeframe (1k)')
+    plt.ylabel('occurence / timeframe')
+    plt.title('')
+    plt.legend()
+    plt.grid(True)
+    plt.savefig(plot_dir)
+    #plt.show()
+
+
+
+
+
+head_ratio = 0.001
+head_weight = 0.99
+steepness = 1
+avoid_overlap = True
+
+def long_tailed_prob(x,z, y, head_num, gamma=0.1,steepness=10):
+    if not (x <= y <= z):
+        raise ValueError("Ensure that x <= y <= z.")
+    theta = head_num / (z-x)
+
+    if not (0 <= theta <= 1) or not (0 <= gamma <= 1):
+        raise ValueError("Ensure that 0 <= theta <= 1 and 0 <= gamma <= 1.")
+    critical_point = x + (z - x) * theta
+    
+    if y < critical_point:
+        prob_value = gamma + (1 - gamma) * (1 - (y - x) / (critical_point - x))
+    else:
+        tail_scale = 1 / (z - critical_point)
+        prob_value = gamma * math.exp(-tail_scale * (y - critical_point)*steepness)
+    
+    return prob_value
+
+
+def long_tailed_redistribution(sample_idx,opt):
+    final_sample_idx = []
+    final_sample_labels = []
+    counter = {}
+    total_counts = 0
+    for s in range(len(sample_idx)):
+         counter[s] = len(sample_idx[s])
+         total_counts = total_counts + counter[s]
+    cls = sorted(counter.keys())
+    bucks = {key: [0] for key in counter}
+    indices_first_appearence = {key: -1 for key in counter}
+    for i in range(total_counts):
+        for j in range(len(cls)):
+            cl = cls[j]
+            cond = True
+            if avoid_overlap:
+                cond = len(sample_idx[cl]) >= counter[cl] * (1-head_ratio)
+            else:
+                cond = len(bucks[cl]) <= counter[cl] * head_ratio
+            if  cond:
+                index_for_first_appearence = indices_first_appearence[cl]
+                if index_for_first_appearence == -1:
+                    index_for_first_appearence = indices_first_appearence[cl] = i
+                prob = long_tailed_prob(index_for_first_appearence,total_counts,i,head_ratio*counter[cl],head_weight,steepness)
+                bucks[cl].append(prob)
+                break
+            else: 
+                index_for_first_appearence = indices_first_appearence[cl]
+                prob = long_tailed_prob(index_for_first_appearence,total_counts,i,head_ratio*counter[cl],head_weight,steepness)
+                bucks[cl].append(prob)
+                
+        while True:
+            weights = [bucks[i][-1] for i in bucks.keys()]
+            total_weights = sum(weights)
+            normalized = [w / total_weights for w in weights]
+            selected = np.random.choice(list(range(len(cls))),p=normalized) 
+            if len(sample_idx[selected])>0:
+                final_sample_idx.append(sample_idx[selected].pop())
+                final_sample_labels.append(selected)
+                break
+    #print([str(label)+"," for label in final_sample_labels])
+    with open('./final_sample_labels.csv', mode='w', newline='') as file:
+        writer = csv.writer(file)
+        for item in final_sample_labels:
+            writer.writerow([item])
+    plot_digit_statistics('./final_sample_labels.csv',
+                          os.path.join(opt.save_folder, 'sampling_dist_'+str(head_ratio)+"_"+str(head_weight)+"_"+str(steepness)+""+str(avoid_overlap)+".png"),
+                          len(sample_idx))
+    return final_sample_idx,final_sample_labels    
+        
 def sparse2coarse(targets):
     """Convert Pytorch CIFAR100 sparse targets to coarse targets.'
     Code copied from https://github.com/ryanchankh/cifar100coarse/blob/master/sparse2coarse.py
@@ -43,13 +170,13 @@ class ThreeCropTransform:
 
 class SeqSampler(Sampler):
     def __init__(self, dataset, blend_ratio, n_concurrent_classes,
-                 train_samples_per_cls):
+                 train_samples_per_cls,opt):
         """data_source is a Subset"""
         self.num_samples = len(dataset)
         self.blend_ratio = blend_ratio
         self.n_concurrent_classes = n_concurrent_classes
         self.train_samples_per_cls = train_samples_per_cls
-
+        self.opt = opt
         # Configure the correct train_subset and val_subset
         if torch.is_tensor(dataset.targets):
             self.labels = dataset.targets.detach().cpu().numpy()
@@ -114,17 +241,45 @@ class SeqSampler(Sampler):
                             tmp = sample_idx[c-1][-ind-1]
                             sample_idx[c-1][-ind-1] = sample_idx[c][ind]
                             sample_idx[c][ind] = tmp
+        for cls in sample_idx:
+                print(len(cls))
+        if True:
+            final_idx,_ = long_tailed_redistribution(sample_idx,self.opt)
+            return iter(final_idx)
+        else:   
+            final_idx = []
+            for sample in sample_idx:
+                final_idx += sample
+            return iter(final_idx)
+    
 
-        final_idx = []
-        for sample in sample_idx:
-            final_idx += sample
-        return iter(final_idx)
-
+        
     def __len__(self):
         if len(self.train_samples_per_cls) == 1:
             return self.n_classes * self.train_samples_per_cls[0]
         else:
             return sum(self.train_samples_per_cls)
+
+def redistribute_samples(sample_idx):
+    n = len(sample_idx)
+
+    for i in range(n):
+        current_samples = sample_idx[i]
+
+        num_to_move = 300
+
+        if num_to_move == 0:
+            continue
+
+        samples_to_move = random.sample(current_samples, num_to_move)
+
+        for offset in [3, 5, 7]:
+            if i + offset < n:
+                sample_idx[i + offset].extend(samples_to_move)
+        
+        sample_idx[i] = [x for x in current_samples if x not in samples_to_move]
+
+    return sample_idx
 
 
 def set_loader(opt):
@@ -320,7 +475,7 @@ def set_loader(opt):
     else:  # sequential
         train_sampler = SeqSampler(train_dataset, opt.blend_ratio,
                                    opt.n_concurrent_classes,
-                                   opt.train_samples_per_cls)
+                                   opt.train_samples_per_cls,opt)
         train_loader = torch.utils.data.DataLoader(
             train_dataset, batch_size=opt.batch_size, shuffle=False,
             num_workers=opt.num_workers, pin_memory=True, sampler=train_sampler)

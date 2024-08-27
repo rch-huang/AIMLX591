@@ -192,6 +192,9 @@ def parse_option():
         os.makedirs(opt.tb_folder)
 
     opt.save_folder = os.path.join(opt.model_path, opt.model_name)
+    from datetime import datetime
+    opt.save_folder = os.path.join(opt.save_folder, datetime.now().strftime("%m%d%H%M%S"))
+
     if not os.path.isdir(opt.save_folder):
         os.makedirs(opt.save_folder)
 
@@ -331,11 +334,12 @@ def train(train_loader, test_loader, knntrain_loader,
     end = time.time()
     for idx, (images, labels) in enumerate(train_loader):
         data_time.update(time.time() - end)
-
         # test - plot t-SNE
-        if idx % val_freq == 0:
+        if idx % val_freq*10 == 0:
+            print("\n\n\n\n\n")
             validate(test_loader, knntrain_loader, model, optimizer,
                      opt, mem, cur_stream_step, epoch, logger, task_list)
+            print("\n\n\n\n\n")
 
         # record a snapshot of the model as past model
         past_model = copy.deepcopy(model)
@@ -371,21 +375,21 @@ def train(train_loader, test_loader, knntrain_loader,
 
             # print info
             if cur_stream_step % opt.print_freq == 0:
-                print('Train stream: [{0}][{1}][{2}/{3}]\t'
-                      'loss {4}\t'
-                      'loss_contrast {5}\t'
-                      'loss_distill {6}\t'
+                print('Train stream: [{0}/{1}]\t'
+                      'loss {2}\t'
+                      'loss_contrast {3}\t'
+                      'loss_distill {4}\t'
                       'pos pairs {pos_pair.val:.3f} ({pos_pair.avg:.3f})'.format(
-                    epoch, cur_stream_step, idx + 1, len(train_loader),
+                    idx + 1, len(train_loader),
                     losses_stream.avg,
                     losses_contrast.avg,
                     losses_distill.avg * train_step.distill_power,
                     pos_pair=pos_pairs_stream))
-                print('Forward time {}\tloss time {}\t'
-                      'pairwise comp time {}\tmemory update time {}'.format(
-                    forward_time.avg, loss_time.avg,
-                    pair_comp_time.avg, mem_update_time.avg
-                ))
+                # print('Forward time {}\tloss time {}\t'
+                #       'pairwise comp time {}\tmemory update time {}'.format(
+                #     forward_time.avg, loss_time.avg,
+                #     pair_comp_time.avg, mem_update_time.avg
+                # ))
                 sys.stdout.flush()
 
         # update memory
@@ -461,7 +465,7 @@ def validate(test_loader, knn_train_loader, model, optimizer,
     # np.save(os.path.join(opt.save_folder, 'test_labels.npy'), test_labels)
 
     # Save the current model
-    if SAVE_MODEL:
+    if SAVE_MODEL and False:
         save_file = os.path.join(opt.save_folder, '{}_{}.pth'.format(epoch, cur_step))
         save_model(model, optimizer, opt, opt.epochs, save_file)
 
@@ -537,8 +541,8 @@ def main():
                  mem, cur_stream_step, epoch, logger, task_list)
         opt.plot = False
 
-    save_file = os.path.join(opt.save_folder, 'last.pth')
-    save_model(model, optimizer, opt, opt.epochs, save_file)
+    #save_file = os.path.join(opt.save_folder, 'last.pth')
+    #save_model(model, optimizer, opt, opt.epochs, save_file)
 
 
 if __name__ == '__main__':
