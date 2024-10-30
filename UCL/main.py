@@ -8,7 +8,7 @@ from utils.loggers import *
 
 import sys
 sys.path.append(os.path.dirname(os.path.abspath(__file__)) + '/../')
-from eval_utils import cluster_eval, knn_eval, save_model, plot_mem
+from eval_utils import cluster_eval, knn_eval,knn_task_eval, save_model, plot_mem
 from data_utils import set_loader
 
 VAL_CNT = 10  # Number of validations to allow during training
@@ -51,10 +51,10 @@ def validate(val_loader, knn_train_loader, model, optimizer_stream, opt, mem,
     cluster_eval(test_embeddings, test_labels, opt, mem, cur_step, epoch, logger)
 
     # kNN classification
-    knn_eval(test_embeddings, test_labels, knn_embeddings, knn_labels,
-             opt, mem, cur_step, epoch, logger)
-    #knn_task_eval(test_embeddings, test_labels, knn_embeddings, knn_labels,
-    #              opt, mem, cur_step, epoch, logger, task_list)
+    #knn_eval(test_embeddings, test_labels, knn_embeddings, knn_labels,
+    #         opt, mem, cur_step, epoch, logger)
+    knn_task_eval(test_embeddings, test_labels, knn_embeddings, knn_labels,
+                  opt, mem, cur_step, epoch, logger, task_list)
 
     # Memory plot
     if opt.plot and opt.mem_size_per_class > 0 and cur_step > 0:

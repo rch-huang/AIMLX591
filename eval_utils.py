@@ -91,7 +91,7 @@ def plot_mem_select(all_embeddings, all_true_labels, select_indexes, opt,
                 bbox_inches='tight')
     plt.close(fig)
 
-def eval_acc(y_true, y_pred):
+def eval_acc(y_true, y_pred,needLog=False,logger_idx=-1,opt=None):
     """
     Calculate clustering accuracy. Require scikit-learn installed.
     # Arguments
@@ -111,6 +111,21 @@ def eval_acc(y_true, y_pred):
     from scipy.optimize import linear_sum_assignment as linear_assignment
     rInd, cInd = linear_assignment(w.max() - w)
     # print(w)
+
+    if needLog:
+        correct_classifications = [w[rInd[i], cInd[i]] for i in range(rInd.size)]
+        total_per_label = [np.sum(w[rInd[i], :]) for i in range(rInd.size)]
+        classification_ratios = [correct_classifications[i] / total_per_label[i] for i in range(len(rInd))]
+
+        ratios = [0,0,0,0,0,0,0,0,0,0]
+        for i in range(len(rInd)):
+            true_label = rInd[i]
+            predicted_label = cInd[i]
+            correct_count = correct_classifications[i]
+            ratio = classification_ratios[i]
+            ratios[i] = ratio
+            #print(f"True Label {true_label} -> Predicted Label {predicted_label}: {correct_count} correctly classified, Ratio: {ratio:.2f}")
+        opt.stats["spectral_acc"][logger_idx] = ratios   
     acc = sum([w[rInd[i], cInd[i]] for i in range(rInd.size)]) * 1.0 / y_pred.size
 
     # compute confusion matrix and purity
@@ -143,7 +158,7 @@ def tsne_simil(x, metric='euclidean', sigma=1.0):
 
 
 def cluster_eval(test_embeddings, test_labels, opt, mem, cur_step, epoch,
-                 logger):
+                 logger,logger_idx=-1):
     """Cluster and plot in evaluations"""
     num_classes = int(np.unique(test_labels).size * opt.k_scale)
 
@@ -190,7 +205,7 @@ def cluster_eval(test_embeddings, test_labels, opt, mem, cur_step, epoch,
     test_pred_labels = SpectralClustering(n_clusters=num_classes, affinity='precomputed', n_init=10,
                                           assign_labels='discretize').fit_predict(similarity_matrix)
     spectral_time = time.time() - st
-    spectral_acc, spectral_purity = eval_acc(test_labels, test_pred_labels)
+    spectral_acc, spectral_purity = eval_acc(test_labels, test_pred_labels,True,logger_idx,opt)
 
     print('Val: [{0}][{1}]\t spectral {metric}: acc {acc} purity {purity} (time {time})'.format(
         epoch, cur_step, metric=metric, time=spectral_time, acc=spectral_acc, purity=spectral_purity))
@@ -230,17 +245,74 @@ def eval_knn(test_embeddings, test_labels, knn_train_embeddings, knn_train_label
 
 
 def knn_eval(test_embeddings, test_labels, knn_train_embeddings, knn_train_labels,
-             opt, mem, cur_step, epoch, logger):
+             opt, mem, cur_step, epoch, logger,idx,cls_to_distinguish=[]):
     """KNN classification and plot in evaluations"""
     # perform kNN classification
     from sklearn.neighbors import KNeighborsClassifier
     st = time.time()
     neigh = KNeighborsClassifier(n_neighbors=opt.kneighbor)
+    pred_knn_labels = neigh.fit(knn_train_embeddings, knn_train_labels).predict(knn_train_embeddings)
     pred_labels = neigh.fit(knn_train_embeddings, knn_train_labels).predict(test_embeddings)
+
     knn_time = time.time() - st
     knn_acc = np.sum(pred_labels == test_labels) / pred_labels.size
+    opt.stats["acc_knn_training_set"][idx]=[]
+    opt.stats["acc_val_set"][idx]=[]
+    for k in range(10):
+        opt.stats["acc_distinguish_"+str(k)][idx]=[]
+    for i in range(10):
+        all_i = np.sum(knn_train_labels==i)
+        succeed_i = np.sum((knn_train_labels==i)&(pred_knn_labels==i))
+        #print('knn training labels {i},{succeed}/{all} = {rate}'.format(i=i,succeed=succeed_i,all = all_i,rate = succeed_i/all_i))
+        opt.stats["acc_knn_training_set"][idx].append(succeed_i/all_i)
+    opt.stats['acc_knn_training_set'][idx].append(np.sum(pred_knn_labels == knn_train_labels) / knn_train_labels.size)
 
-    print('Val: [{0}][{1}]\t knn: acc {acc} (time {time})'.format(
+    for i in range(10):
+        all_i = np.sum(test_labels==i)
+        succeed_i = np.sum((test_labels==i)&(pred_labels==i))
+        print('CL Val labels {i},{succeed}/{all} = {rate}'.format(i=i,succeed=succeed_i,all = all_i,rate = succeed_i/all_i))
+        opt.stats["acc_val_set"][idx].append(succeed_i/all_i)
+    opt.stats['acc_val_set'][idx].append(np.sum(test_labels == pred_labels) / pred_labels.size)
+
+    mean_for_labels = [0.0] * 10
+    test_embeddings_for_labels = [[] for i in range(10)] 
+    dists_matrix =  [[[] for j in range(10)] for i in range(10)] 
+    for idx_labels in range(len(test_embeddings)):
+        label = test_labels[idx_labels]
+        test_embeddings_for_labels[label].append(np.array(test_embeddings[idx_labels]))
+    mean_for_labels = [np.mean(np.stack(label), axis=0) for label in test_embeddings_for_labels]
+    for i in range(10):
+        for ii in range(10):
+            dists_matrix[i][ii] = np.linalg.norm(mean_for_labels[i] - mean_for_labels[ii])
+    def print_matrix(matrix):
+        for row in matrix:
+            print(" ".join(f"{elem:>7.3f}" for elem in row))
+    print_matrix(dists_matrix)
+    for k in range(10):
+        for i in range(10):
+            #for j in range(10):
+                opt.stats["acc_distinguish_"+str(k)][idx].append(float(dists_matrix[i][k]))
+    # for i in range(10):
+    #     anchor_a = []
+    #     anchor_b = []
+    #     succeed_i_to_distinguish_from_the_negative = 0
+    #     for cc in ccc:
+    #         if i in cc:
+    #             for c in cc:
+    #                 if c != i:
+    #                     for idx_labels in range(len(test_labels)):
+    #                         if test_labels[idx_labels] == c:
+    #                             anchor_a.append(np.array(test_embeddings[idx_labels]))
+    #                         if test_labels[idx_labels] == i:
+    #                             anchor_b.append(np.array(test_embeddings[idx_labels]))
+    #     meana = np.mean(np.stack(anchor_a), axis=0)
+    #     meanb = np.mean(np.stack(anchor_b), axis=0)
+    #     dist = np.linalg.norm(meana - meanb)
+    #     opt.stats["acc_distinguish"][idx].append(float(dist))
+    #opt.stats["acc_distinguish"][idx].append(0.0)
+
+
+    print('CL KNN Val: [{0}][{1}]\t knn: acc {acc} (time {time})'.format(
         epoch, cur_step, time=knn_time, acc=knn_acc))
     sys.stdout.flush()
 
@@ -263,7 +335,6 @@ def knn_task_eval(test_embeddings, test_labels, knn_train_embeddings, knn_train_
     from sklearn.neighbors import KNeighborsClassifier
     st = time.time()
     knn_task_acc = []
-
     for task in task_list:
         # perform kNN classification
         knn_train_ind = np.isin(knn_train_labels, task)
@@ -275,7 +346,7 @@ def knn_task_eval(test_embeddings, test_labels, knn_train_embeddings, knn_train_
         knn_task_acc.append(knn_acc)
 
     knn_time = time.time() - st
-    knn_task_acc = np.mean(knn_task_acc)
+    #knn_task_acc = np.mean(knn_task_acc)
 
     print('Val: [{0}][{1}]\t knn task: acc {acc} (time {time})'.format(
         epoch, cur_step, time=knn_time, acc=knn_task_acc))

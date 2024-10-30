@@ -279,7 +279,7 @@ class Memory(object):
                 elif self.cluster_type == 'psa':
                     select_indices = diversipy.subset.psa_select(all_embeddings, self.max_size)
                     select_indices.sort()
-                    print('select {} from {}'.format(self.max_size, all_embeddings.shape[0]))
+                    #print('select {} from {}'.format(self.max_size, all_embeddings.shape[0]))
 
                 elif self.cluster_type == 'maximin':
                     # As in the MinRed paper, use cosine similarity after normed

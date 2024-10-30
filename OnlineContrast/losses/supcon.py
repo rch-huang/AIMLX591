@@ -245,6 +245,7 @@ def similarity_mask_old(feat_all, bsz, opt, pos_pairs):
     # and add the similarity together for average
     simil_mat_avg = torch.zeros(bsz, bsz).to(device)
     mat_cnt = 0
+    
     for i in range(n_views):
         for j in range(n_views):
             # feat_row and feat_col should be of size [bsz^2, bsz^2]

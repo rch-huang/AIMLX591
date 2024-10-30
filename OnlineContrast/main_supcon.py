@@ -16,6 +16,10 @@ from util import AverageMeter
 from memory import Memory
 from losses.supcon import similarity_mask_new, similarity_mask_old  # for scale
 from losses import get_loss
+import os
+from PIL import Image
+import torchvision.transforms as transforms
+from tqdm import tqdm
 
 try:
     import apex
@@ -137,6 +141,8 @@ def parse_option():
     parser.add_argument('--mem_update_type', type=str, default='reservoir',
                         choices=['rdn', 'mo_rdn', 'reservoir', 'simil'],
                         help='memory update policy')
+    parser.add_argument('--normalize_embeddings', type=int, default=0,
+                        help="whether use normalized embeddings")
     parser.add_argument('--mem_w_labels', default=False, action="store_true",
                         help="whether use labels during memory update")
     parser.add_argument('--mem_cluster_type', type=str, default='none',
@@ -198,13 +204,14 @@ def parse_option():
     if not os.path.isdir(opt.save_folder):
         os.makedirs(opt.save_folder)
 
+
+    opt.logfilename = 'Criterion_'+str(opt.criterion)+'#LifelongMethod_'+str(opt.lifelong_method)+'#Steps_'+str(opt.steps_per_batch_stream)+"#BatchSize_"+str(opt.batch_size)+'#Epochs_'+str(opt.epochs)+'#Mem_'+str(opt.mem_samples)+'#Date_'+str(datetime.now().strftime('%Y%m%d%H%M%S'))
     return opt
 
 
 def train_step(images, labels, models, criterions, optimizer,
-               meters, opt, mem, train_transform):
+               meters, opt, mem, train_transform,index_of_steps_since_beginning):
     """One gradient descent step"""
-
     model, past_model = models
     criterion, criterion_reg = criterions
     losses_stream, losses_contrast, losses_distill, \
@@ -291,7 +298,7 @@ def train_step(images, labels, models, criterions, optimizer,
         train_step.distill_power = losses_contrast.avg * opt.distill_power / losses_distill.avg
 
     loss = loss_contrast + train_step.distill_power * loss_distill
-
+    #print("loss_contrast / loss_distill = "+str(loss_contrast/(train_step.distill_power * loss_distill)))
     losses_stream.update(loss.item(), bsz)
 
     # SGD
@@ -303,8 +310,12 @@ def train_step(images, labels, models, criterions, optimizer,
         criterion.update_moving_average()
 
 train_step.distill_power = 0.0
-
-
+import json
+def convert_types(obj):
+            if isinstance(obj, np.int64):
+                return int(obj)
+            raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+        
 def train(train_loader, test_loader, knntrain_loader,
           train_transform, model, criterions, optimizer, epoch,
           opt, mem, logger, task_list):
@@ -329,16 +340,23 @@ def train(train_loader, test_loader, knntrain_loader,
 
     # Set validation frequency
     val_freq = np.floor(len(train_loader) / VAL_CNT).astype('int')
-    print('Validation frequency: {}'.format(val_freq))
+    #print('Validation frequency: {}'.format(val_freq))
 
     end = time.time()
+    #opt.stats = {"times_cls":{},"acc_knn_training_set":{},"acc_val_set":{},"spectral_acc":{}}
     for idx, (images, labels) in enumerate(train_loader):
+        np_labels = np.array(labels)
+        cls_to_distinguish = [cls for cls in set(labels)]
+        
         data_time.update(time.time() - end)
+
+        
         # test - plot t-SNE
-        if idx % val_freq*10 == 0:
-            print("\n\n\n\n\n")
+        if False:
+        #if idx % 20 ==0:#val_freq*10 == 0:
+            print("\n\n\n\n\n #epoch#"+str(epoch))
             validate(test_loader, knntrain_loader, model, optimizer,
-                     opt, mem, cur_stream_step, epoch, logger, task_list)
+                     opt, mem, cur_stream_step, epoch, logger, task_list,idx+(epoch-1)*len(train_loader))
             print("\n\n\n\n\n")
 
         # record a snapshot of the model as past model
@@ -352,10 +370,26 @@ def train(train_loader, test_loader, knntrain_loader,
         # compute loss
         for _ in range(opt.steps_per_batch_stream):
             
+            index_of_steps_since_beginning = _+opt.steps_per_batch_stream*idx+(epoch-1)*len(train_loader)
+            if _ == 0:
+                opt.stats["times_cls"][index_of_steps_since_beginning] = [np.sum(np_labels==i) for i in range(10)]
+                print(str(index_of_steps_since_beginning) +" "+str(opt.stats["times_cls"][index_of_steps_since_beginning]))
+            # if isinstance(images, list):
+            #     imagess = torch.stack(images)  # Convert list of images to a tensor
+            # current_batch_size = 1024
+            # random_indices = torch.randperm(current_batch_size)[:512]
+            # subset_images = imagess[:, random_indices, :, :] 
+            # subset_labels = labels[random_indices]
+            past_model = copy.deepcopy(model)
+            past_model.eval()
+            models = [model, model]
+            
             # Trigger one gradient descent step
             train_step(images, labels, models, criterions,
-                       optimizer, meters, opt, mem, train_transform)
-
+                       optimizer, meters, opt, mem, train_transform,index_of_steps_since_beginning)
+            if _ % 100 == 0 :
+                validate(test_loader, knntrain_loader, model, optimizer,
+                     opt, mem, cur_stream_step, epoch, logger, task_list,index_of_steps_since_beginning,cls_to_distinguish)
             # tensorboard logger
             logger.log_value('learning_rate',
                              optimizer.param_groups[0]['lr'],
@@ -374,8 +408,8 @@ def train(train_loader, test_loader, knntrain_loader,
             cur_stream_step += 1
 
             # print info
-            if cur_stream_step % opt.print_freq == 0:
-                print('Train stream: [{0}/{1}]\t'
+            if cur_stream_step % 10 == 0:
+                print('Train stream: [{step_idx}/{0}/{1}]\t'
                       'loss {2}\t'
                       'loss_contrast {3}\t'
                       'loss_distill {4}\t'
@@ -384,6 +418,7 @@ def train(train_loader, test_loader, knntrain_loader,
                     losses_stream.avg,
                     losses_contrast.avg,
                     losses_distill.avg * train_step.distill_power,
+                    step_idx=_,
                     pos_pair=pos_pairs_stream))
                 # print('Forward time {}\tloss time {}\t'
                 #       'pairwise comp time {}\tmemory update time {}'.format(
@@ -410,10 +445,20 @@ def train(train_loader, test_loader, knntrain_loader,
         mem_update_time.update(mem_end - mem_start)
         batch_time.update(time.time() - end)
         end = time.time()
+        filename = 'stats_'+opt.logfilename+'.json'
+        with open(filename, 'w') as json_file:
+            json.dump(opt.stats, json_file, indent=4,default=convert_types)
+     
+def normalize_embeddings(embeddings):
+    norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
 
-
+    norms[norms == 0] = 1
+    
+    normalized_embeddings = embeddings / norms
+    
+    return normalized_embeddings
 def validate(test_loader, knn_train_loader, model, optimizer,
-             opt, mem, cur_step, epoch, logger, task_list):
+             opt, mem, cur_step, epoch, logger, task_list,idx_training_step,cls_to_distinguish=[]):
     """validation, evaluate k-means clustering accuracy and plot t-SNE"""
     model.eval()
     test_labels, val_labels, knn_labels = [], [], []
@@ -425,6 +470,8 @@ def validate(test_loader, knn_train_loader, model, optimizer,
             images = images.cuda(non_blocking=True)
 
         embeddings = model(images).detach().cpu().numpy()
+        if opt.normalize_embeddings == 1:
+            embeddings = normalize_embeddings(embeddings)
         if knn_embeddings is None:
             knn_embeddings = embeddings
         else:
@@ -432,8 +479,17 @@ def validate(test_loader, knn_train_loader, model, optimizer,
         knn_labels += labels.detach().tolist()
     knn_labels = np.array(knn_labels).astype(int)
 
+    os.makedirs("test_loader",exist_ok=True)
     # Test loader
     for idx, (images, labels) in enumerate(tqdm(test_loader, desc='test')):
+        if False:
+            for i in range(images.size(0)):  # Loop over the batch
+                image = transforms.ToPILImage()(images[i])
+                label = labels[i].item()
+                filename = f"test_loader/img_{idx * images.size(0) + i}_label_{label}.jpg"
+                image.save(filename)
+
+
         if torch.cuda.is_available():
             images = images.cuda(non_blocking=True)
             # labels = labels.cuda(non_blocking=True)
@@ -446,15 +502,15 @@ def validate(test_loader, knn_train_loader, model, optimizer,
             test_embeddings = np.concatenate((test_embeddings, embeddings), axis=0)
         test_labels += labels.detach().tolist()
     test_labels = np.array(test_labels).astype(int)
-
+    print([np.sum(test_labels==i) for i in range(10)])
     # Unsupervised clustering
-    cluster_eval(test_embeddings, test_labels, opt, mem, cur_step, epoch, logger)
+    #cluster_eval(test_embeddings, test_labels, opt, mem, cur_step, epoch, logger,idx_training_step)
 
     # kNN classification
     knn_eval(test_embeddings, test_labels, knn_embeddings, knn_labels,
-             opt, mem, cur_step, epoch, logger)
-    # knn_task_eval(test_embeddings, test_labels, knn_embeddings, knn_labels,
-    #              opt, mem, cur_step, epoch, logger, task_list, model_name)
+             opt, mem, cur_step, epoch, logger,idx_training_step,cls_to_distinguish)
+    #knn_task_eval(test_embeddings, test_labels, knn_embeddings, knn_labels,
+    #              opt, mem, cur_step, epoch, logger, task_list)
 
     # Memory plot
     if opt.plot and opt.mem_size > 0 and cur_step > 0:
@@ -518,8 +574,9 @@ def main():
     #all_labels = np.sort(np.unique(np.array(all_labels).astype(int)))
     task_list = np.reshape(np.arange(dataset_num_classes[opt.dataset]),
                            (-1, dataset_num_classes[opt.dataset])).tolist()
-    print('task list', task_list)
-
+    opt.stats = {"times_cls":{},"acc_knn_training_set":{},"acc_val_set":{},"spectral_acc":{}}
+    for k in range(10):
+        opt.stats["acc_distinguish_"+str(k)]={}
     # training routine
     for epoch in range(1, opt.epochs + 1):
         # adjust_learning_rate(opt, optimizer, epoch)
@@ -531,19 +588,26 @@ def main():
               train_transform, model, criterions, optimizer, epoch,
               opt, mem, logger, task_list)
         time2 = time.time()
-        print('epoch {}, total time {:.2f}'.format(epoch, time2 - time1))
+        #print('epoch {}, total time {:.2f}'.format(epoch, time2 - time1))
 
         # Plot t-SNE
         cur_stream_step = epoch * steps_per_epoch_stream
         opt.plot = True
-        print('Test student model')
-        validate(test_loader, knntrain_loader, model, optimizer, opt,
-                 mem, cur_stream_step, epoch, logger, task_list)
+        #print('Test student model')
+        #validate(test_loader, knntrain_loader, model, optimizer, opt,
+        #         mem, cur_stream_step, epoch, logger, task_list,-1)
         opt.plot = False
 
     #save_file = os.path.join(opt.save_folder, 'last.pth')
     #save_model(model, optimizer, opt, opt.epochs, save_file)
-
+    filename = 'stats_'+opt.logfilename+'.json'
+    if True:
+        import plot2
+        import plot4
+        plot2.plotting_acc(filename,None)
+        cc = [[0,1],[2,3],[4,5],[6,7],[8,9]]
+        for c in cc:
+            plot4.plotting_acc(filename,None,c[0],c[1])
 
 if __name__ == '__main__':
     main()

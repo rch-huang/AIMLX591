@@ -18,7 +18,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from collections import Counter
 
-def count_digits_in_chunks(filename, cls=10,chunk_size=50):
+def count_digits_in_chunks(filename, cls=10,chunk_size=256):
     df = pd.read_csv(filename, header=None)
     
     data = df[0].astype(int).values
@@ -41,7 +41,7 @@ def count_digits_in_chunks(filename, cls=10,chunk_size=50):
     
     return digit_counts, num_chunks
 
-def plot_digit_statistics(filename,plot_dir, cls=10,chunk_size=1000):
+def plot_digit_statistics(filename,plot_dir, cls=10,chunk_size=256):
     digit_counts, num_chunks = count_digits_in_chunks(filename,cls, chunk_size)
     
     x = np.arange(num_chunks)
@@ -63,7 +63,7 @@ def plot_digit_statistics(filename,plot_dir, cls=10,chunk_size=1000):
 
 
 head_ratio = 0.001
-head_weight = 0.99
+head_weight = 0.10
 steepness = 1
 avoid_overlap = True
 
@@ -93,10 +93,19 @@ def long_tailed_redistribution(sample_idx,opt):
     for s in range(len(sample_idx)):
          counter[s] = len(sample_idx[s])
          total_counts = total_counts + counter[s]
+    if False:
+        while True:
+            for s in range(len(sample_idx)):
+                if len(final_sample_idx) == total_counts:
+                    return final_sample_idx,final_sample_labels
+                final_sample_idx.append(sample_idx[s].pop())
+                final_sample_labels.append(s)
     cls = sorted(counter.keys())
     bucks = {key: [0] for key in counter}
     indices_first_appearence = {key: -1 for key in counter}
     for i in range(total_counts):
+        if len(final_sample_idx) == total_counts:
+            break
         for j in range(len(cls)):
             cl = cls[j]
             cond = True
@@ -122,9 +131,20 @@ def long_tailed_redistribution(sample_idx,opt):
             normalized = [w / total_weights for w in weights]
             selected = np.random.choice(list(range(len(cls))),p=normalized) 
             if len(sample_idx[selected])>0:
-                final_sample_idx.append(sample_idx[selected].pop())
-                final_sample_labels.append(selected)
+                for bb in range(1):
+                    final_sample_idx.append(sample_idx[selected].pop())
+                    final_sample_labels.append(selected)
                 break
+        
+        #break
+    print(final_sample_labels)
+    #final_sample_idx.clear()
+    #final_sample_labels.clear()
+    # for i in range(40960):
+    #             selected = np.random.choice(list(range(len(sample_idx[2])))) 
+    #             final_sample_idx.append(sample_idx[2][selected])
+    #             final_sample_labels.append(2)
+    #             print(i)
     #print([str(label)+"," for label in final_sample_labels])
     with open('./final_sample_labels.csv', mode='w', newline='') as file:
         writer = csv.writer(file)
@@ -133,7 +153,7 @@ def long_tailed_redistribution(sample_idx,opt):
     plot_digit_statistics('./final_sample_labels.csv',
                           os.path.join(opt.save_folder, 'sampling_dist_'+str(head_ratio)+"_"+str(head_weight)+"_"+str(steepness)+""+str(avoid_overlap)+".png"),
                           len(sample_idx))
-    return final_sample_idx,final_sample_labels    
+    return final_sample_idx,final_sample_labels  
         
 def sparse2coarse(targets):
     """Convert Pytorch CIFAR100 sparse targets to coarse targets.'
@@ -199,11 +219,17 @@ class SeqSampler(Sampler):
 
         filter_fn = lambda y: np.logical_and(
             np.greater_equal(y, cmin[c]), np.less(y, cmax[c]))
-
+        
+        filter_fn2 = lambda y: np.logical_and(
+            np.greater_equal(y, c), True)
         # Configure sequential class-incremental input
         sample_idx = []
         for c in self.classes:
-            filtered_train_ind = filter_fn(self.labels)
+            filtered_train_ind = None
+            if c >= len(cmax):
+                filtered_train_ind = filter_fn2(self.labels)
+            else:
+                filtered_train_ind = filter_fn(self.labels)
             filtered_ind = np.arange(self.labels.shape[0])[filtered_train_ind]
             np.random.shuffle(filtered_ind)
 
@@ -218,7 +244,11 @@ class SeqSampler(Sampler):
                 sample_num = self.train_samples_per_cls[cls_idx]
 
             sample_idx.append(filtered_ind.tolist()[:sample_num])
-            print('Class [{}, {}): {} samples'.format(cmin[cls_idx], cmax[cls_idx],
+            if c >= len(cmin):
+                print('Class [{}, {}): {} samples'.format(cls_idx, cls_idx,
+                                                      sample_num))
+            else:
+                print('Class [{}, {}): {} samples'.format(cmin[cls_idx], cmax[cls_idx],
                                                       sample_num))
 
         # Configure blending class
@@ -243,7 +273,7 @@ class SeqSampler(Sampler):
                             sample_idx[c][ind] = tmp
         for cls in sample_idx:
                 print(len(cls))
-        if True:
+        if False:
             final_idx,_ = long_tailed_redistribution(sample_idx,self.opt)
             return iter(final_idx)
         else:   
@@ -485,7 +515,7 @@ def set_loader(opt):
     val_subset, _ = torch.utils.data.random_split(dataset=val_dataset,
                                                   lengths=[val_subset_len, len(val_dataset) - val_subset_len])
     val_loader = torch.utils.data.DataLoader(
-        val_subset, batch_size=opt.val_batch_size, shuffle=True,
+        val_subset, batch_size=opt.val_batch_size, shuffle=False,
         num_workers=0, pin_memory=True)
 
     # Create kNN loader
