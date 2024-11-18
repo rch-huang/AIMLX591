@@ -8,11 +8,11 @@
 
 cd ..;
 
-lr=0.005
+lr=0.01
 model=resnet18
 distill_power=0.15;
-mem_samples=512;
-mem_size=1024;
+mem_samples=1028;
+mem_size=2056;
 epochs=1;
 if [ $3 = "iid" ]; then
   thres_ratio=0.6;
@@ -33,7 +33,7 @@ if [ $2 = "mnist" ] || [ $2 = "svhn" ]; then
     fi
 
     if [ $3 = "seq" ]; then
-      python3.7 main_supcon.py --criterion $1  --dataset $2 --model cnn --training_data_type class_iid  \
+      python3.7 main_supcon.py --criterion $1 --lifelong_method co2l --dataset $2 --model cnn --training_data_type class_iid  \
         --batch_size 256 --mem_samples $mem_samples --mem_size $mem_size \
         --val_batch_size 128 --num_workers 8 --steps_per_batch_stream 20 --epochs $epochs \
         --learning_rate_stream $lr --temp_cont 0.1 --simil tSNE --temp_tSNE 0.1 --thres_ratio $thres_ratio --distill_power $distill_power \
@@ -76,8 +76,8 @@ if [ $2 = "cifar10" ] ; then
   for cluster_type in psa # maximin energy max_coverage kmeans
   do
     if [ $3 = "iid" ]; then
-      python3.7  -m pdb main_supcon.py  --criterion $1   --dataset $2 --model resnet18 --training_data_type iid  \
-        --batch_size 256 --mem_samples $mem_samples --mem_size $mem_size \
+      python3.7    main_supcon.py  --criterion $1 --lifelong_method co2l  --dataset $2 --model resnet18 --training_data_type iid  \
+        --batch_size 1024 --mem_samples $mem_samples --mem_size $mem_size \
         --val_batch_size 128 --num_workers 4 --steps_per_batch_stream $5 --epochs $epochs \
         --learning_rate_stream $lr --temp_cont 0.1 --simil tSNE --temp_tSNE 0.1 --thres_ratio $thres_ratio --distill_power $distill_power \
         --mem_update_type mo_rdn --mem_cluster_type $cluster_type  --mem_max_new_ratio 0.1 --mem_max_classes 10 \
@@ -85,8 +85,8 @@ if [ $2 = "cifar10" ] ; then
     fi
 
     if [ $3 = "seq" ]; then
-      python3.7  main_supcon.py  --normalize_embeddings $6 --criterion $1 --dataset $2 --model resnet18 --training_data_type class_iid  \
-        --batch_size 1024 --mem_samples $mem_samples --mem_size $mem_size \
+      python3.7  main_supcon.py  --criterion $1   --dataset $2 --model resnet18 --training_data_type class_iid  \
+        --batch_size 1028 --mem_samples $mem_samples --mem_size $mem_size \
         --val_batch_size 128 --num_workers 8 --steps_per_batch_stream $5 --epochs $epochs \
         --learning_rate_stream $lr --temp_cont 0.1 --simil tSNE  --temp_tSNE 0.1 --thres_ratio $thres_ratio --distill_power $distill_power \
         --mem_update_type mo_rdn --mem_cluster_type $cluster_type --mem_max_new_ratio 0.1 --mem_max_classes 10 \
@@ -103,7 +103,7 @@ if [ $2 = "cifar10" ] ; then
     fi
 
     if [ $3 = "seq-cc" ]; then
-      python3.7 -m pdb main_supcon.py --criterion $1 --lifelong_method scale  --dataset $2 --model resnet18 --training_data_type class_iid --n_concurrent_classes 2 \
+      python3.7   main_supcon.py --criterion $1 --lifelong_method co2l  --dataset $2 --model resnet18 --training_data_type class_iid --n_concurrent_classes 2 \
         --batch_size 1024  --mem_samples $mem_samples --mem_size $mem_size \
         --val_batch_size 128 --num_workers 8 --steps_per_batch_stream $5 --epochs $epochs \
         --learning_rate_stream $lr --temp_cont 0.1 --simil tSNE --temp_tSNE 0.1 --thres_ratio $thres_ratio --distill_power $distill_power \

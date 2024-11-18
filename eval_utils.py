@@ -258,15 +258,47 @@ def knn_eval(test_embeddings, test_labels, knn_train_embeddings, knn_train_label
     knn_acc = np.sum(pred_labels == test_labels) / pred_labels.size
     opt.stats["acc_knn_training_set"][idx]=[]
     opt.stats["acc_val_set"][idx]=[]
+    opt.stats["(TP+TN)/N"][idx]=[]
+    opt.stats["precision"][idx]=[]
+    opt.stats["F-Measure"][idx]=[]
     for k in range(10):
         opt.stats["acc_distinguish_"+str(k)][idx]=[]
-    for i in range(10):
-        all_i = np.sum(knn_train_labels==i)
-        succeed_i = np.sum((knn_train_labels==i)&(pred_knn_labels==i))
-        #print('knn training labels {i},{succeed}/{all} = {rate}'.format(i=i,succeed=succeed_i,all = all_i,rate = succeed_i/all_i))
-        opt.stats["acc_knn_training_set"][idx].append(succeed_i/all_i)
-    opt.stats['acc_knn_training_set'][idx].append(np.sum(pred_knn_labels == knn_train_labels) / knn_train_labels.size)
-
+    if True:
+        for i in range(10):
+            all_i = np.sum(knn_train_labels==i)
+            succeed_i = np.sum((knn_train_labels==i)&(pred_knn_labels==i))
+            opt.stats["acc_knn_training_set"][idx].append(succeed_i/all_i)
+        opt.stats['acc_knn_training_set'][idx].append(np.sum(pred_knn_labels == knn_train_labels) / knn_train_labels.size)
+    if True:
+        sum = 0
+        for i in range(10):
+            all_N = len(knn_train_labels)
+            true_positive = np.sum((knn_train_labels==i)&(pred_knn_labels==i))
+            true_negative = np.sum((knn_train_labels!=i)&(pred_knn_labels!=i))
+            opt.stats["(TP+TN)/N"][idx].append((true_positive+true_negative)/all_N)
+            sum += (true_positive+true_negative)/all_N
+        opt.stats['(TP+TN)/N'][idx].append(sum/10)
+    if True:
+        sum = 0
+        for i in range(10):
+            true_positive = np.sum((knn_train_labels==i)&(pred_knn_labels==i))
+            false_positive = np.sum((knn_train_labels!=i)&(pred_knn_labels==i))
+            opt.stats["precision"][idx].append(true_positive/(true_positive+false_positive))
+            sum += true_positive/(true_positive+false_positive)
+        opt.stats['precision'][idx].append(sum/10)
+    if True:
+        sum = 0
+        for i in range(10):
+            #F-Measure = 2 * (precision * recall) / (precision + recall)
+            true_positive = np.sum((knn_train_labels==i)&(pred_knn_labels==i))
+            false_positive = np.sum((knn_train_labels!=i)&(pred_knn_labels==i))
+            false_negative = np.sum((knn_train_labels==i)&(pred_knn_labels!=i))
+            precision = true_positive/(true_positive+false_positive)
+            recall = true_positive/(true_positive+false_negative)
+            f_measure = 2 * (precision * recall) / (precision + recall)
+            sum += f_measure
+            opt.stats["F-Measure"][idx].append(f_measure)
+        opt.stats['F-Measure'][idx].append(sum/10)
     for i in range(10):
         all_i = np.sum(test_labels==i)
         succeed_i = np.sum((test_labels==i)&(pred_labels==i))

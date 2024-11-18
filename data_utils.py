@@ -196,7 +196,9 @@ class SeqSampler(Sampler):
         self.blend_ratio = blend_ratio
         self.n_concurrent_classes = n_concurrent_classes
         self.train_samples_per_cls = train_samples_per_cls
-        self.opt = opt
+        copy_opt = copy.deepcopy(opt)
+        copy_opt.trial = 0
+        self.opt = copy_opt         
         # Configure the correct train_subset and val_subset
         if torch.is_tensor(dataset.targets):
             self.labels = dataset.targets.detach().cpu().numpy()
@@ -314,9 +316,10 @@ def redistribute_samples(sample_idx):
 
 def set_loader(opt):
     # set seed for reproducing
-    random.seed(opt.trial)
-    np.random.seed(opt.trial)
-    torch.manual_seed(opt.trial)
+    opt_trial = 0
+    random.seed(opt_trial)
+    np.random.seed(opt_trial)
+    torch.manual_seed(opt_trial)
 
     # construct data loader
     if opt.dataset == 'cifar10':

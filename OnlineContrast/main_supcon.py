@@ -280,8 +280,11 @@ def train_step(images, labels, models, criterions, optimizer,
         f0_logits, loss_distill = criterion_reg(model, past_model,
                                                 feed_images_0)
         losses_distill.update(loss_distill.item(), bsz)
-
-        loss_contrast = criterion(model, model, feed_images_0, feed_images_1)
+        if opt.criterion == 'supcon':
+            loss_contrast = criterion(model, model, feed_images_0, feed_images_1,
+                             labels=feed_labels)
+        else:
+            loss_contrast = criterion(model, model, feed_images_0, feed_images_1)
 
     elif opt.lifelong_method == 'cassle':
 
@@ -345,6 +348,7 @@ def train(train_loader, test_loader, knntrain_loader,
     end = time.time()
     #opt.stats = {"times_cls":{},"acc_knn_training_set":{},"acc_val_set":{},"spectral_acc":{}}
     for idx, (images, labels) in enumerate(train_loader):
+        print("RANDOM data "+str(idx)+" "+str(torch.mean(images[0][1]).item()))
         np_labels = np.array(labels)
         cls_to_distinguish = [cls for cls in set(labels)]
         
@@ -445,7 +449,7 @@ def train(train_loader, test_loader, knntrain_loader,
         mem_update_time.update(mem_end - mem_start)
         batch_time.update(time.time() - end)
         end = time.time()
-        filename = 'stats_'+opt.logfilename+'.json'
+        filename = 'stats_'+opt.logfilename+'#seed_'+str(opt.trial)+'.json'
         with open(filename, 'w') as json_file:
             json.dump(opt.stats, json_file, indent=4,default=convert_types)
      
@@ -534,19 +538,31 @@ def main():
     print("============================================")
 
     # set seed for reproducing
+    
+
+    # build data loader
+    
     random.seed(opt.trial)
     np.random.seed(opt.trial)
     torch.manual_seed(opt.trial)
-
-    # build data loader
-    train_loader, test_loader, knntrain_loader, train_transform = set_loader(opt)
-
+    
     # build model
     model = load_student_backbone(opt.model,
                                   opt.lifelong_method,
                                   opt.dataset,
                                   opt.ckpt)
+    train_loader, test_loader, knntrain_loader, train_transform = set_loader(opt)
 
+    if True:
+        all_weights = []
+        for param in model.parameters():
+            if param.requires_grad:   
+                all_weights.append(param.flatten())
+
+        all_weights = torch.cat(all_weights)
+
+        mean_value = torch.mean(all_weights).item()
+        print("Random Seed effect for initial weights: "+str(mean_value))
     # build criterion
     criterion, criterion_reg = get_loss(opt)
     criterions = [criterion, criterion_reg]
@@ -574,7 +590,15 @@ def main():
     #all_labels = np.sort(np.unique(np.array(all_labels).astype(int)))
     task_list = np.reshape(np.arange(dataset_num_classes[opt.dataset]),
                            (-1, dataset_num_classes[opt.dataset])).tolist()
-    opt.stats = {"times_cls":{},"acc_knn_training_set":{},"acc_val_set":{},"spectral_acc":{}}
+    opt.stats = {
+        "times_cls":{},
+        "acc_knn_training_set":{},
+        "acc_val_set":{},
+        "spectral_acc":{},
+        "(TP+TN)/N":{},
+        "precision":{},
+        "F-Measure":{},
+        }
     for k in range(10):
         opt.stats["acc_distinguish_"+str(k)]={}
     # training routine
@@ -601,7 +625,7 @@ def main():
     #save_file = os.path.join(opt.save_folder, 'last.pth')
     #save_model(model, optimizer, opt, opt.epochs, save_file)
     filename = 'stats_'+opt.logfilename+'.json'
-    if True:
+    if False:
         import plot2
         import plot4
         plot2.plotting_acc(filename,None)
