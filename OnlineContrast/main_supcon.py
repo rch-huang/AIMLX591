@@ -419,11 +419,11 @@ def train(train_loader, test_loader, knntrain_loader,
             # Trigger one gradient descent step
             mem_true_labels = train_step(images, labels, models, criterions,
                        optimizer, meters, opt, mem, train_transform,index_of_steps_since_beginning)
-            if mem_true_labels is not None and _ % 10 == 0:
+            if mem_true_labels is not None:
                 for mem_true_label in mem_true_labels:
                         opt.stats["times_mem_cls"][index_of_steps_since_beginning][mem_true_label] += 1 
                 print(str(index_of_steps_since_beginning) +" mem "+str(opt.stats["times_mem_cls"][index_of_steps_since_beginning])) 
-            if _ % 10 == 0:
+            if _ == 9 or _ == 19:
                 validate(test_loader, knntrain_loader, model, optimizer,
                      opt, mem, cur_stream_step, epoch, logger, task_list,index_of_steps_since_beginning,cls_to_distinguish,seen_classes)
             # tensorboard logger
