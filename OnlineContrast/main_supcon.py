@@ -106,6 +106,9 @@ def parse_option():
     parser.add_argument('--criterion', type=str, default='supcon',
                         choices=['supcon', 'simclr', 'scale'],
                         help='major criterion')
+    parser.add_argument('--lifelong_id', type=int, default=0,
+                        help='id for lifelong learning method') #0 none, 2 scale, 1 co2l    
+                                             
     parser.add_argument('--lifelong_method', type=str, default='none',
                         choices=['none', 'scale', 'co2l', 'cassle'],
                         help='choose lifelong learning method')
@@ -130,7 +133,8 @@ def parse_option():
                         help='path to the pretrained backbone to load')
     parser.add_argument('--trial', type=int, default=0,
                         help='id for recording multiple runs')
-
+    parser.add_argument('--testid', type=int, default=0,
+                        help='test Index for AIMLX 591 report')
     # Memory
     parser.add_argument('--mem_max_classes', type=int, default=1,
                         help='max number of classes in memory')
@@ -143,7 +147,7 @@ def parse_option():
                         help='memory update policy')
     parser.add_argument('--normalize_embeddings', type=int, default=0,
                         help="whether use normalized embeddings")
-    parser.add_argument('--mem_w_labels', default=False, action="store_true",
+    parser.add_argument('--mem_w_labels', type=int, default=0,
                         help="whether use labels during memory update")
     parser.add_argument('--mem_cluster_type', type=str, default='none',
                         choices=['none', 'kmeans', 'spectral', 'max_coverage',
@@ -159,7 +163,17 @@ def parse_option():
                         help="whether to plot during evaluation")
 
     opt = parser.parse_args()
-
+    if opt.mem_w_labels == 0:
+        opt.mem_w_labels = False
+    else:
+        opt.mem_w_labels = True
+    if opt.lifelong_id == 0:
+        opt.lifelong_method = 'none'
+    elif opt.lifelong_id == 1:
+        opt.lifelong_method = 'co2l'
+    elif opt.lifelong_id == 2:
+        opt.lifelong_method = 'scale'
+    
     # check if dataset is path that passed required arguments
     if opt.dataset == 'path':
         assert opt.data_folder is not None \
@@ -205,7 +219,7 @@ def parse_option():
         os.makedirs(opt.save_folder)
 
 
-    opt.logfilename = 'Criterion_'+str(opt.criterion)+'#LifelongMethod_'+str(opt.lifelong_method)+'#Steps_'+str(opt.steps_per_batch_stream)+"#BatchSize_"+str(opt.batch_size)+'#Epochs_'+str(opt.epochs)+'#Mem_'+str(opt.mem_samples)+'#Date_'+str(datetime.now().strftime('%Y%m%d%H%M%S'))
+    opt.logfilename = 'Date_'+str(datetime.now().strftime('%Y%m%d_%H_%M_%S'))+'#Criterion_'+str(opt.criterion)+'#LifelongMethod_'+str(opt.lifelong_method)+'#Steps_'+str(opt.steps_per_batch_stream)+"#BatchSize_"+str(opt.batch_size)+'#Epochs_'+str(opt.epochs)+'#Mem_'+str(opt.mem_samples)
     return opt
 
 
@@ -218,13 +232,15 @@ def train_step(images, labels, models, criterions, optimizer,
         pos_pairs, forward_time, loss_time, pair_comp_time = meters
 
     # load memory samples
-    mem_images, mem_labels = mem.get_mem_samples()
+    if opt.mem_samples>0:
+        mem_images, mem_labels,mem_true_labels = mem.get_mem_samples()
 
     # get augmented streaming and augmented samples and concatenate them
     if opt.mem_samples > 0 and mem_images is not None:
         sample_cnt = min(opt.mem_samples, mem_images.shape[0])
         select_ind = np.random.choice(mem_images.shape[0], sample_cnt, replace=False)
-
+        mem_true_labels = mem_true_labels[select_ind]
+        print("count of memory samples "+str(select_ind.shape))
         # Augment memory samples
         aug_mem_images_0 = torch.stack([train_transform(ee.cpu() * 255)
                                         for ee in mem_images[select_ind]])
@@ -311,6 +327,10 @@ def train_step(images, labels, models, criterions, optimizer,
 
     if opt.criterion == 'byol':
         criterion.update_moving_average()
+    if opt.mem_samples>0:
+        return mem_true_labels
+    else:
+        return
 
 train_step.distill_power = 0.0
 import json
@@ -346,9 +366,16 @@ def train(train_loader, test_loader, knntrain_loader,
     #print('Validation frequency: {}'.format(val_freq))
 
     end = time.time()
-    #opt.stats = {"times_cls":{},"acc_knn_training_set":{},"acc_val_set":{},"spectral_acc":{}}
+    #opt.stats = {"times_cls":{},"times_mem_cls":{},"acc_knn_training_set":{},"acc_val_set":{},"spectral_acc":{}}
+    seen_classes = []#[0,1,2,3,4,5,6,7,8,9]
     for idx, (images, labels) in enumerate(train_loader):
         print("RANDOM data "+str(idx)+" "+str(torch.mean(images[0][1]).item()))
+
+        labels_set = set(labels)
+        for label in labels_set:
+            if label not in seen_classes:
+                seen_classes.append(label)
+
         np_labels = np.array(labels)
         cls_to_distinguish = [cls for cls in set(labels)]
         
@@ -360,7 +387,7 @@ def train(train_loader, test_loader, knntrain_loader,
         #if idx % 20 ==0:#val_freq*10 == 0:
             print("\n\n\n\n\n #epoch#"+str(epoch))
             validate(test_loader, knntrain_loader, model, optimizer,
-                     opt, mem, cur_stream_step, epoch, logger, task_list,idx+(epoch-1)*len(train_loader))
+                     opt, mem, cur_stream_step, epoch, logger, task_list,idx+(epoch-1)*len(train_loader),seen_classes)
             print("\n\n\n\n\n")
 
         # record a snapshot of the model as past model
@@ -375,9 +402,10 @@ def train(train_loader, test_loader, knntrain_loader,
         for _ in range(opt.steps_per_batch_stream):
             
             index_of_steps_since_beginning = _+opt.steps_per_batch_stream*idx+(epoch-1)*len(train_loader)
-            if _ == 0:
+            if _ == 0 or True:
                 opt.stats["times_cls"][index_of_steps_since_beginning] = [np.sum(np_labels==i) for i in range(10)]
-                print(str(index_of_steps_since_beginning) +" "+str(opt.stats["times_cls"][index_of_steps_since_beginning]))
+                opt.stats["times_mem_cls"][index_of_steps_since_beginning] = [0 for i in range(10)]
+                print(str(index_of_steps_since_beginning) +" cls "+str(opt.stats["times_cls"][index_of_steps_since_beginning]))
             # if isinstance(images, list):
             #     imagess = torch.stack(images)  # Convert list of images to a tensor
             # current_batch_size = 1024
@@ -389,11 +417,15 @@ def train(train_loader, test_loader, knntrain_loader,
             models = [model, model]
             
             # Trigger one gradient descent step
-            train_step(images, labels, models, criterions,
+            mem_true_labels = train_step(images, labels, models, criterions,
                        optimizer, meters, opt, mem, train_transform,index_of_steps_since_beginning)
-            if _ % 100 == 0 :
+            if mem_true_labels is not None and _ % 10 == 0:
+                for mem_true_label in mem_true_labels:
+                        opt.stats["times_mem_cls"][index_of_steps_since_beginning][mem_true_label] += 1 
+                print(str(index_of_steps_since_beginning) +" mem "+str(opt.stats["times_mem_cls"][index_of_steps_since_beginning])) 
+            if _ % 10 == 0:
                 validate(test_loader, knntrain_loader, model, optimizer,
-                     opt, mem, cur_stream_step, epoch, logger, task_list,index_of_steps_since_beginning,cls_to_distinguish)
+                     opt, mem, cur_stream_step, epoch, logger, task_list,index_of_steps_since_beginning,cls_to_distinguish,seen_classes)
             # tensorboard logger
             logger.log_value('learning_rate',
                              optimizer.param_groups[0]['lr'],
@@ -412,7 +444,7 @@ def train(train_loader, test_loader, knntrain_loader,
             cur_stream_step += 1
 
             # print info
-            if cur_stream_step % 10 == 0:
+            if cur_stream_step % 10 == 0 and False:
                 print('Train stream: [{step_idx}/{0}/{1}]\t'
                       'loss {2}\t'
                       'loss_contrast {3}\t'
@@ -449,7 +481,7 @@ def train(train_loader, test_loader, knntrain_loader,
         mem_update_time.update(mem_end - mem_start)
         batch_time.update(time.time() - end)
         end = time.time()
-        filename = 'stats_'+opt.logfilename+'#seed_'+str(opt.trial)+'.json'
+        filename = 'TestID_'+str(opt.testid)+'#seed_'+str(opt.trial)+'#stats_'+opt.logfilename+'.json'
         with open(filename, 'w') as json_file:
             json.dump(opt.stats, json_file, indent=4,default=convert_types)
      
@@ -462,14 +494,20 @@ def normalize_embeddings(embeddings):
     
     return normalized_embeddings
 def validate(test_loader, knn_train_loader, model, optimizer,
-             opt, mem, cur_step, epoch, logger, task_list,idx_training_step,cls_to_distinguish=[]):
+             opt, mem, cur_step, epoch, logger, task_list,idx_training_step,cls_to_distinguish=[],seen_classes=[]):
     """validation, evaluate k-means clustering accuracy and plot t-SNE"""
     model.eval()
     test_labels, val_labels, knn_labels = [], [], []
     test_embeddings, val_embeddings, knn_embeddings = None, None, None
 
     # kNN training loader
+    seen_classes_torch = torch.tensor(seen_classes)
     for idx, (images, labels) in enumerate(tqdm(knn_train_loader, desc="knn training")):
+        if False:
+            mask = torch.isin(labels, seen_classes_torch)
+            images = images[mask]
+            labels = labels[mask]
+        
         if torch.cuda.is_available():
             images = images.cuda(non_blocking=True)
 
@@ -486,6 +524,10 @@ def validate(test_loader, knn_train_loader, model, optimizer,
     os.makedirs("test_loader",exist_ok=True)
     # Test loader
     for idx, (images, labels) in enumerate(tqdm(test_loader, desc='test')):
+        if False:
+            mask = torch.isin(labels, seen_classes_torch)
+            images = images[mask]
+            labels = labels[mask]
         if False:
             for i in range(images.size(0)):  # Loop over the batch
                 image = transforms.ToPILImage()(images[i])
@@ -512,7 +554,7 @@ def validate(test_loader, knn_train_loader, model, optimizer,
 
     # kNN classification
     knn_eval(test_embeddings, test_labels, knn_embeddings, knn_labels,
-             opt, mem, cur_step, epoch, logger,idx_training_step,cls_to_distinguish)
+             opt, mem, cur_step, epoch, logger,idx_training_step,cls_to_distinguish,seen_classes)
     #knn_task_eval(test_embeddings, test_labels, knn_embeddings, knn_labels,
     #              opt, mem, cur_step, epoch, logger, task_list)
 
@@ -592,15 +634,20 @@ def main():
                            (-1, dataset_num_classes[opt.dataset])).tolist()
     opt.stats = {
         "times_cls":{},
+        "times_mem_cls":{},
         "acc_knn_training_set":{},
         "acc_val_set":{},
         "spectral_acc":{},
         "(TP+TN)/N":{},
         "precision":{},
         "F-Measure":{},
+        "kappa":{},
+        "var":{},
+        "balanced_accuracy":{}
         }
     for k in range(10):
         opt.stats["acc_distinguish_"+str(k)]={}
+  
     # training routine
     for epoch in range(1, opt.epochs + 1):
         # adjust_learning_rate(opt, optimizer, epoch)

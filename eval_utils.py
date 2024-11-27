@@ -245,14 +245,35 @@ def eval_knn(test_embeddings, test_labels, knn_train_embeddings, knn_train_label
 
 
 def knn_eval(test_embeddings, test_labels, knn_train_embeddings, knn_train_labels,
-             opt, mem, cur_step, epoch, logger,idx,cls_to_distinguish=[]):
+             opt, mem, cur_step, epoch, logger,idx,cls_to_distinguish=[],seen_classes=[]):
     """KNN classification and plot in evaluations"""
     # perform kNN classification
     from sklearn.neighbors import KNeighborsClassifier
     st = time.time()
     neigh = KNeighborsClassifier(n_neighbors=opt.kneighbor)
-    pred_knn_labels = neigh.fit(knn_train_embeddings, knn_train_labels).predict(knn_train_embeddings)
+    #pred_knn_labels = neigh.fit(knn_train_embeddings, knn_train_labels).predict(knn_train_embeddings)
     pred_labels = neigh.fit(knn_train_embeddings, knn_train_labels).predict(test_embeddings)
+    
+    neigh_k1 = KNeighborsClassifier(n_neighbors=1)
+    #filter knn_train_embeddings and knn_train_labels to only include the classes in seen_classes
+    knn_train_embeddings_filtered = []
+    knn_train_labels_filtered = []
+    for i in range(len(knn_train_labels)):
+        if knn_train_labels[i] in seen_classes:
+            knn_train_embeddings_filtered.append(knn_train_embeddings[i])
+            knn_train_labels_filtered.append(knn_train_labels[i])
+    knn_train_embeddings_filtered = np.array(knn_train_embeddings_filtered)
+    knn_train_labels_filtered = np.array(knn_train_labels_filtered)
+    #filter test_embeddings and test_labels to only include the classes in seen_classes
+    test_embeddings_filtered = []
+    test_labels_filtered = []
+    for i in range(len(test_labels)):
+        if test_labels[i] in seen_classes:
+            test_embeddings_filtered.append(test_embeddings[i])
+            test_labels_filtered.append(test_labels[i])
+    test_embeddings_filtered = np.array(test_embeddings_filtered)
+    test_labels_filtered = np.array(test_labels_filtered)
+    pred_labels_filtered = neigh_k1.fit(knn_train_embeddings_filtered, knn_train_labels_filtered).predict(test_embeddings_filtered)
 
     knn_time = time.time() - st
     knn_acc = np.sum(pred_labels == test_labels) / pred_labels.size
@@ -261,69 +282,151 @@ def knn_eval(test_embeddings, test_labels, knn_train_embeddings, knn_train_label
     opt.stats["(TP+TN)/N"][idx]=[]
     opt.stats["precision"][idx]=[]
     opt.stats["F-Measure"][idx]=[]
+    opt.stats["kappa"][idx]=[]
+    opt.stats["var"][idx]=[]
+    opt.stats["balanced_accuracy"][idx]=[]
+    if False:
+        test_embeddings_by_labels = [[] for i in range(10)] 
+        from sklearn.manifold import TSNE
+        tsne = TSNE(n_components=2, random_state=42)
+        test_embeddings_reduced = tsne.fit_transform(test_embeddings)
+
+        for idx_labels in range(len(test_embeddings)):
+            label = test_labels[idx_labels]
+            test_embeddings_by_labels[label].append(test_embeddings_reduced[idx_labels])    
+        for i in range(10):
+            test_embeddings_by_labels[i] = np.stack(test_embeddings_by_labels[i])
+            #print(test_embeddings_by_labels[i].shape)
+            var = np.sum(np.var(test_embeddings_by_labels[i], axis=0))
+            print("var of "+str(i)+" is "+str(var))
+            opt.stats["var"][idx].append(var.item())
+ 
     for k in range(10):
         opt.stats["acc_distinguish_"+str(k)][idx]=[]
-    if True:
+    if False:
         for i in range(10):
             all_i = np.sum(knn_train_labels==i)
             succeed_i = np.sum((knn_train_labels==i)&(pred_knn_labels==i))
             opt.stats["acc_knn_training_set"][idx].append(succeed_i/all_i)
         opt.stats['acc_knn_training_set'][idx].append(np.sum(pred_knn_labels == knn_train_labels) / knn_train_labels.size)
+    if False:
+        for i in range(10):
+            for j in range(10):
+                if j!=i:
+                    knn_train_embeddings_for_i_and_j = []
+                    knn_train_labels_for_i_and_j = []
+                    test_embeddings_for_i_and_j = []
+                    test_labels_for_i_and_j = []
+                    for k in range(len(knn_train_embeddings)):
+                        if knn_train_labels[k] == j or knn_train_labels[k] == i:
+                            knn_train_embeddings_for_i_and_j.append(knn_train_embeddings[k])
+                            knn_train_labels_for_i_and_j.append(knn_train_labels[k])
+                    for k in range(len(test_embeddings)):
+                        if test_labels[k] == j or test_labels[k] == i:
+                            test_embeddings_for_i_and_j.append(test_embeddings[k])
+                            test_labels_for_i_and_j.append(test_labels[k])
+                    neigh = KNeighborsClassifier(n_neighbors=opt.kneighbor)
+                    pred_labels_for_i_and_j = neigh.fit(knn_train_embeddings_for_i_and_j, knn_train_labels_for_i_and_j).predict(test_embeddings_for_i_and_j) 
+                    test_labels_for_i_and_j = np.array(test_labels_for_i_and_j)
+                    knn_acc_for_i = np.sum((pred_labels_for_i_and_j==i) &(test_labels_for_i_and_j==i) ) / np.sum(test_labels_for_i_and_j==i)
+                    opt.stats["acc_distinguish_"+str(i)][idx].append(knn_acc_for_i)
+                else:
+                    opt.stats["acc_distinguish_"+str(i)][idx].append(0.0)
+
     if True:
         sum = 0
         for i in range(10):
-            all_N = len(knn_train_labels)
-            true_positive = np.sum((knn_train_labels==i)&(pred_knn_labels==i))
-            true_negative = np.sum((knn_train_labels!=i)&(pred_knn_labels!=i))
-            opt.stats["(TP+TN)/N"][idx].append((true_positive+true_negative)/all_N)
-            sum += (true_positive+true_negative)/all_N
+            all_N = len(test_labels)
+            true_positive = np.sum((test_labels==i)&(pred_labels==i))
+            true_negative = np.sum((test_labels!=i)&(pred_labels!=i))
+            ratioOfCorrectness=(true_positive+true_negative)/all_N
+            opt.stats["(TP+TN)/N"][idx].append(ratioOfCorrectness)
+            sum += ratioOfCorrectness
         opt.stats['(TP+TN)/N'][idx].append(sum/10)
     if True:
         sum = 0
         for i in range(10):
-            true_positive = np.sum((knn_train_labels==i)&(pred_knn_labels==i))
-            false_positive = np.sum((knn_train_labels!=i)&(pred_knn_labels==i))
-            opt.stats["precision"][idx].append(true_positive/(true_positive+false_positive))
-            sum += true_positive/(true_positive+false_positive)
+            true_positive = np.sum((test_labels==i)&(pred_labels==i))
+            false_positive = np.sum((test_labels!=i)&(pred_labels==i))
+            if true_positive+false_positive !=0:
+                precision =  true_positive /(true_positive+false_positive)
+            else:
+                precision = 0.0
+            opt.stats["precision"][idx].append(precision)
+            sum += precision
         opt.stats['precision'][idx].append(sum/10)
     if True:
         sum = 0
         for i in range(10):
             #F-Measure = 2 * (precision * recall) / (precision + recall)
-            true_positive = np.sum((knn_train_labels==i)&(pred_knn_labels==i))
-            false_positive = np.sum((knn_train_labels!=i)&(pred_knn_labels==i))
-            false_negative = np.sum((knn_train_labels==i)&(pred_knn_labels!=i))
+            true_positive = np.sum((test_labels==i)&(pred_labels==i))
+            false_positive = np.sum((test_labels!=i)&(pred_labels==i))
+            false_negative = np.sum((test_labels==i)&(pred_labels!=i))
             precision = true_positive/(true_positive+false_positive)
             recall = true_positive/(true_positive+false_negative)
-            f_measure = 2 * (precision * recall) / (precision + recall)
+            if precision+recall != 0:
+                f_measure = 2 * (precision * recall) / (precision + recall)
+            else:
+                f_measure = 0.0
             sum += f_measure
             opt.stats["F-Measure"][idx].append(f_measure)
         opt.stats['F-Measure'][idx].append(sum/10)
-    for i in range(10):
-        all_i = np.sum(test_labels==i)
-        succeed_i = np.sum((test_labels==i)&(pred_labels==i))
-        print('CL Val labels {i},{succeed}/{all} = {rate}'.format(i=i,succeed=succeed_i,all = all_i,rate = succeed_i/all_i))
-        opt.stats["acc_val_set"][idx].append(succeed_i/all_i)
-    opt.stats['acc_val_set'][idx].append(np.sum(test_labels == pred_labels) / pred_labels.size)
-
-    mean_for_labels = [0.0] * 10
-    test_embeddings_for_labels = [[] for i in range(10)] 
-    dists_matrix =  [[[] for j in range(10)] for i in range(10)] 
-    for idx_labels in range(len(test_embeddings)):
-        label = test_labels[idx_labels]
-        test_embeddings_for_labels[label].append(np.array(test_embeddings[idx_labels]))
-    mean_for_labels = [np.mean(np.stack(label), axis=0) for label in test_embeddings_for_labels]
-    for i in range(10):
-        for ii in range(10):
-            dists_matrix[i][ii] = np.linalg.norm(mean_for_labels[i] - mean_for_labels[ii])
-    def print_matrix(matrix):
-        for row in matrix:
-            print(" ".join(f"{elem:>7.3f}" for elem in row))
-    print_matrix(dists_matrix)
-    for k in range(10):
+    if True:
         for i in range(10):
-            #for j in range(10):
-                opt.stats["acc_distinguish_"+str(k)][idx].append(float(dists_matrix[i][k]))
+            all_i = np.sum(test_labels==i)
+            if all_i == 0:
+                opt.stats["acc_val_set"][idx].append(0.0)
+                continue
+            succeed_i = np.sum((test_labels==i)&(pred_labels==i))
+            opt.stats["acc_val_set"][idx].append(succeed_i/all_i)
+        opt.stats['acc_val_set'][idx].append(np.sum(test_labels == pred_labels) / pred_labels.size)
+    if True:
+        balanced_accuracy = 0
+        for i in range(10):
+            all_i = np.sum(test_labels_filtered==i)
+            if all_i == 0:
+                opt.stats["balanced_accuracy"][idx].append(0.0)
+                continue
+            true_positive = np.sum((test_labels_filtered==i)&(pred_labels_filtered==i))
+            true_negative = np.sum((test_labels_filtered!=i)&(pred_labels_filtered!=i))
+            false_negative = np.sum((test_labels_filtered==i)&(pred_labels_filtered!=i))
+            false_positive = np.sum((test_labels_filtered!=i)&(pred_labels_filtered==i))
+            FPR =  false_positive/(true_negative+false_positive)
+            TPR = true_positive/(true_positive+false_negative)
+            balanced_accuracy=(TPR+1-FPR)/2
+            if np.isnan(balanced_accuracy):
+                balanced_accuracy = 0.0
+            opt.stats['balanced_accuracy'][idx].append(balanced_accuracy)
+        opt.stats['balanced_accuracy'][idx].append(np.sum(opt.stats['balanced_accuracy'][idx])/np.sum(np.array(opt.stats['balanced_accuracy'][idx])!=0))
+
+        
+
+    p0 = 0
+    pe = 0
+    for i in range(10):
+        p0 += np.sum((test_labels==i)&(pred_labels==i))/len(test_labels)
+        pe += np.sum(test_labels==i)*np.sum(pred_labels==i)/(len(test_labels)*len(test_labels))
+    kappa = (p0-pe)/(1-pe)
+    opt.stats['kappa'][idx].append(kappa)
+   
+    # mean_for_labels = [0.0] * 10
+    # test_embeddings_by_labels = [[] for i in range(10)] 
+    # dists_matrix =  [[[] for j in range(10)] for i in range(10)] 
+    # for idx_labels in range(len(test_embeddings)):
+    #     label = test_labels[idx_labels]
+    #     test_embeddings_by_labels[label].append(np.array(test_embeddings[idx_labels]))
+    # mean_for_labels = [np.mean(np.stack(label), axis=0) for label in test_embeddings_by_labels]
+    # for i in range(10):
+    #     for ii in range(10):
+    #         dists_matrix[i][ii] = np.linalg.norm(mean_for_labels[i] - mean_for_labels[ii])
+    # def print_matrix(matrix):
+    #     for row in matrix:
+    #         print(" ".join(f"{elem:>7.3f}" for elem in row))
+    # print_matrix(dists_matrix)
+    # for k in range(10):
+    #     for i in range(10):
+    #         #for j in range(10):
+    #             opt.stats["acc_distinguish_"+str(k)][idx].append(float(dists_matrix[i][k]))
     # for i in range(10):
     #     anchor_a = []
     #     anchor_b = []
@@ -356,8 +459,8 @@ def knn_eval(test_embeddings, test_labels, knn_train_embeddings, knn_train_label
 
     logger.log_value('knn acc', knn_acc, cur_step)
 
-    with open(os.path.join(opt.save_folder, 'result.txt'), 'a+') as f:
-        f.write('{epoch},{step},knn,{knn_acc},\n'.format(epoch=epoch, step=cur_step, knn_acc=knn_acc))
+    # with open(os.path.join(opt.save_folder, 'result.txt'), 'a+') as f:
+    #     f.write('{epoch},{step},knn,{knn_acc},\n'.format(epoch=epoch, step=cur_step, knn_acc=knn_acc))
 
 
 def knn_task_eval(test_embeddings, test_labels, knn_train_embeddings, knn_train_labels,

@@ -165,7 +165,10 @@ class Memory(object):
             # Memory update - sample selection
             # The key is transfer lb - the ground-truth label,
             # and sz_per_lb - size upperbound for each class
-            self.sampling(lb, old_sz, new_sz, self.size_per_class)
+            if True:
+                self.sampling(lb, old_sz, new_sz, self.size_per_class)
+            else:
+                self.sampling(lb, old_sz, new_sz, self.max_size)
 
     def update_wo_labels(self, new_images, new_labels, model=None):
         """
@@ -328,22 +331,25 @@ class Memory(object):
         If updated with update_w_labels, the returned labels are the ground-truth labels.
         If updated with update_wo_labels, the returned labels are the pseudo labels.
         """
-        images, labels = None, None
+        images, labels , true_labels = None, None, None
         for lb in self.labels_set:
             ind = self.labels_set.index(lb)
             if images is None:  # First label
                 images = self.images[ind]
                 labels = np.repeat(lb, self.images[0].shape[0])
+                true_labels = self.true_labels[ind]
             else:  # Subsequent labels to be concatenated
                 images = np.concatenate((images, self.images[ind]), axis=0)
                 labels = np.concatenate((labels,
                                          np.repeat(lb, self.images[ind].shape[0])),
                                         axis=0)
+                true_labels = np.concatenate((true_labels, self.true_labels[ind]), axis=0)
 
         if images is None:  # Empty memory
-            return None, None
+            return None, None,None
         else:
-            return torch.from_numpy(images), torch.from_numpy(labels)
+    
+            return torch.from_numpy(images), torch.from_numpy(labels), torch.from_numpy(true_labels)
 
     def get_mem_samples_w_true_labels(self):
         """
