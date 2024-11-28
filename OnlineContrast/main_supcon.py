@@ -115,7 +115,8 @@ def parse_option():
     parser.add_argument('--simil', type=str, default='tSNE',
                         choices=['tSNE', 'kNN'],
                         help='choose similarity metric')
-
+    parser.add_argument('--longtailed', type=int, default=0,
+                        help="whether use labels during memory update")
     # temperature
     parser.add_argument('--temp_cont', type=float, default=0.1,
                         help='temperature for contrastive loss function')
@@ -127,7 +128,7 @@ def parse_option():
                         help='temperature for loss function')
     parser.add_argument('--past_temp', type=float, default=0.01,
                         help='temperature for loss function')
-
+    
     # other setting
     parser.add_argument('--ckpt', type=str, default=None,
                         help='path to the pretrained backbone to load')

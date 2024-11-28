@@ -196,6 +196,10 @@ class SeqSampler(Sampler):
         self.blend_ratio = blend_ratio
         self.n_concurrent_classes = n_concurrent_classes
         self.train_samples_per_cls = train_samples_per_cls
+        if opt.longtailed:
+            self.longtailed = True
+        else:
+            self.longtailed = False
         copy_opt = copy.deepcopy(opt)
         copy_opt.trial = 0
         self.opt = copy_opt         
@@ -275,8 +279,8 @@ class SeqSampler(Sampler):
                             sample_idx[c][ind] = tmp
         for cls in sample_idx:
                 print(len(cls))
-        if False:
-            final_idx,_ = long_tailed_redistribution(sample_idx,self.opt)
+        if self.longtailed:
+            final_idx,_ = self.long_tailed_redistribution2(sample_idx,self.opt)
             return iter(final_idx)
         else:   
             final_idx = []
@@ -284,6 +288,37 @@ class SeqSampler(Sampler):
                 final_idx += sample
             return iter(final_idx)
     
+    def long_tailed_redistribution2(self,sample_idx,opt):
+        final_sample_idx = []
+        num_of_classes = len(sample_idx)
+        remaining_by_class = [len(sample_idx[i]) for i in range(num_of_classes)]
+        total_size_by_class = [len(sample_idx[i]) for i in range(num_of_classes)]
+        batch_size = 1024
+        while len(final_sample_idx) < sum(total_size_by_class):
+            batch_idx = []
+            for i in range(num_of_classes):
+                if remaining_by_class[i] >= 0.3 * total_size_by_class[i]:
+                    for j in range(int(batch_size*0.8)):
+                        #do with the probability of 0.8
+                        if random.random() < 0.75:
+                            batch_idx.append(sample_idx[i].pop())
+                            remaining_by_class[i] -= 1
+                            if remaining_by_class[i] == 0:
+                                break
+                    if True: 
+                        total_remaining_before_i = sum(remaining_by_class[:i])
+                        for k in range(i):
+                            if True:
+                                t = remaining_by_class[k] 
+                                for l in range(t):
+                                    if random.random() < 1.2*remaining_by_class[k]/total_size_by_class[k]:
+                                        batch_idx.append(sample_idx[k].pop())
+                                        remaining_by_class[k] -= 1
+                    break
+            final_sample_idx += batch_idx
+            if len(batch_idx) == 0:
+                break
+        return final_sample_idx,None
 
         
     def __len__(self):
