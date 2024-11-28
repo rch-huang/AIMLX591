@@ -208,7 +208,6 @@ class Memory(object):
         all_embeddings = model(feed_images).detach().cpu().numpy()
         # all_embeddings_mean = np.mean(all_embeddings, axis=0, keepdims=True)
         # all_embeddings = (all_embeddings - all_embeddings_mean) * 1e4
-
         if self.cluster_type == 'none':
             # One big cluster for all samples
             # The key is transfer lb - the pseudo label
@@ -259,6 +258,7 @@ class Memory(object):
 
         elif self.cluster_type in ['max_coverage', 'psa', 'maximin', 'energy']:
             # Clustering
+            print('Clustering for memory update '+self)
             simil_matrix = tsne_simil(all_embeddings, metric='cosine')
 
             # Init selected indices as all indices

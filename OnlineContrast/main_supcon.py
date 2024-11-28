@@ -174,6 +174,7 @@ def parse_option():
         opt.lifelong_method = 'co2l'
     elif opt.lifelong_id == 2:
         opt.lifelong_method = 'scale'
+        opt.mem_cluster_type = 'max_coverage'
     
     # check if dataset is path that passed required arguments
     if opt.dataset == 'path':
@@ -280,11 +281,11 @@ def train_step(images, labels, models, criterions, optimizer,
         # print(loss_contrast)
 
     elif opt.lifelong_method == 'scale':
-
-        f0_logits, loss_distill = criterion_reg(model, past_model,
+        if True:
+            f0_logits, loss_distill = criterion_reg(model, past_model,
                                                 feed_images_0)
-        losses_distill.update(loss_distill.item(), bsz)
-        pair_comp_time.update(time.time() - start)
+            losses_distill.update(loss_distill.item(), bsz)
+            pair_comp_time.update(time.time() - start)
 
         #contrast_mask = similarity_mask_new(opt.batch_size, f0_logits, opt, pos_pairs)
         features_all = model(feed_images_all)
@@ -644,7 +645,8 @@ def main():
         "F-Measure":{},
         "kappa":{},
         "var":{},
-        "balanced_accuracy":{}
+        "balanced_accuracy":{},
+        "forget":[{"delta":0.0,"idx":0} for i in range(10)]
         }
     for k in range(10):
         opt.stats["acc_distinguish_"+str(k)]={}

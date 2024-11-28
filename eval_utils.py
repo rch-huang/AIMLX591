@@ -248,6 +248,7 @@ def knn_eval(test_embeddings, test_labels, knn_train_embeddings, knn_train_label
              opt, mem, cur_step, epoch, logger,idx,cls_to_distinguish=[],seen_classes=[]):
     """KNN classification and plot in evaluations"""
     # perform kNN classification
+    
     from sklearn.neighbors import KNeighborsClassifier
     st = time.time()
     neigh = KNeighborsClassifier(n_neighbors=opt.kneighbor)
@@ -309,8 +310,14 @@ def knn_eval(test_embeddings, test_labels, knn_train_embeddings, knn_train_label
             succeed_i = np.sum((knn_train_labels==i)&(pred_knn_labels==i))
             opt.stats["acc_knn_training_set"][idx].append(succeed_i/all_i)
         opt.stats['acc_knn_training_set'][idx].append(np.sum(pred_knn_labels == knn_train_labels) / knn_train_labels.size)
-    if False:
+    
+    enable_distinguish = False
+    if opt.testid in [12,15,18,25,26,28]:
+        enable_distinguish = True
+        print("enable_distinguish taskid: "+str(opt.testid))
+    if True:
         for i in range(10):
+            
             for j in range(10):
                 if j!=i:
                     knn_train_embeddings_for_i_and_j = []
@@ -332,6 +339,13 @@ def knn_eval(test_embeddings, test_labels, knn_train_embeddings, knn_train_label
                     opt.stats["acc_distinguish_"+str(i)][idx].append(knn_acc_for_i)
                 else:
                     opt.stats["acc_distinguish_"+str(i)][idx].append(0.0)
+            opt.stats["acc_distinguish_"+str(i)][idx].append( np.sum(np.array(opt.stats["acc_distinguish_"+str(i)][idx]))/9)
+            if idx > 9:
+                delta = opt.stats["acc_distinguish_"+str(i)][idx][-1] - opt.stats["acc_distinguish_"+str(i)][idx-10][-1]
+                if delta < 0:
+                    if delta < opt.stats["forget"][i]["delta"]:
+                        opt.stats["forget"][i]["delta"] = delta
+                        opt.stats["forget"][i]["idx"] = idx
 
     if True:
         sum = 0
