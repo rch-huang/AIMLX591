@@ -172,9 +172,18 @@ def parse_option():
         opt.lifelong_method = 'none'
     elif opt.lifelong_id == 1:
         opt.lifelong_method = 'co2l'
-    elif opt.lifelong_id == 2:
+    elif opt.lifelong_id in [2, 3, 4]: 
+        #2 scale  + distill + max_coverage;
+        #3 sclae  + no distill + max_coverage;
+        #4 sclae  + no distill + none;
+
         opt.lifelong_method = 'scale'
-        opt.mem_cluster_type = 'max_coverage'
+        if opt.lifelong_id == 2 or opt.lifelong_id == 3:
+            opt.mem_cluster_type = 'max_coverage'
+        if opt.lifelong_id == 4:
+            opt.mem_cluster_type = 'none'
+         
+
     
     # check if dataset is path that passed required arguments
     if opt.dataset == 'path':
@@ -281,7 +290,7 @@ def train_step(images, labels, models, criterions, optimizer,
         # print(loss_contrast)
 
     elif opt.lifelong_method == 'scale':
-        if True:
+        if opt.lifelong_id == 3 or opt.lifelong_id == 4:
             f0_logits, loss_distill = criterion_reg(model, past_model,
                                                 feed_images_0)
             losses_distill.update(loss_distill.item(), bsz)

@@ -258,7 +258,7 @@ class Memory(object):
 
         elif self.cluster_type in ['max_coverage', 'psa', 'maximin', 'energy']:
             # Clustering
-            print('Clustering for memory update '+self)
+            print('Clustering for memory update '+self.cluster_type)
             simil_matrix = tsne_simil(all_embeddings, metric='cosine')
 
             # Init selected indices as all indices

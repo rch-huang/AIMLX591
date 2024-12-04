@@ -84,7 +84,7 @@ if [ $2 = "cifar10" ] ; then
         --train_samples_per_cls 4096 --test_samples_per_cls 500 --knn_samples 1000 --trial $4
     fi
     if [ $3 = "longtailed" ]; then
-      python3.7  -m pdb main_supcon.py   --criterion $1 --lifelong_id ${10} --dataset $2 --model resnet18 --training_data_type class_iid  \
+      python3   main_supcon.py   --criterion $1 --lifelong_id ${10} --dataset $2 --model resnet18 --training_data_type class_iid  \
         --batch_size 1024 --mem_samples $mem_samples --mem_size $mem_size \
         --val_batch_size 128 --num_workers 8 --steps_per_batch_stream $5 --epochs $epochs \
         --learning_rate_stream $lr --temp_cont 0.1 --simil tSNE  --temp_tSNE 0.1 --thres_ratio $thres_ratio --distill_power $distill_power \
@@ -93,7 +93,7 @@ if [ $2 = "cifar10" ] ; then
     fi
 
     if [ $3 = "seq" ]; then
-      python3.7  -m pdb main_supcon.py   --criterion $1 --lifelong_id ${10} --dataset $2 --model resnet18 --training_data_type class_iid  \
+      python3   main_supcon.py   --criterion $1 --lifelong_id ${10} --dataset $2 --model resnet18 --training_data_type class_iid  \
         --batch_size 1024 --mem_samples $mem_samples --mem_size $mem_size \
         --val_batch_size 128 --num_workers 8 --steps_per_batch_stream $5 --epochs $epochs \
         --learning_rate_stream $lr --temp_cont 0.1 --simil tSNE  --temp_tSNE 0.1 --thres_ratio $thres_ratio --distill_power $distill_power \
@@ -102,7 +102,7 @@ if [ $2 = "cifar10" ] ; then
     fi
 
     if [ $3 = "seq-cc" ]; then
-      python3.7   main_supcon.py --criterion $1 --lifelong_id ${10} --dataset $2 --model resnet18 --training_data_type class_iid --n_concurrent_classes 2 \
+      python3   main_supcon.py --criterion $1 --lifelong_id ${10} --dataset $2 --model resnet18 --training_data_type class_iid --n_concurrent_classes 2 \
         --batch_size 1024  --mem_samples $mem_samples --mem_size $mem_size \
         --val_batch_size 128 --num_workers 8 --steps_per_batch_stream $5 --epochs $epochs \
         --learning_rate_stream $lr --temp_cont 0.1 --simil tSNE --temp_tSNE 0.1 --thres_ratio $thres_ratio --distill_power $distill_power \

@@ -312,7 +312,7 @@ def knn_eval(test_embeddings, test_labels, knn_train_embeddings, knn_train_label
         opt.stats['acc_knn_training_set'][idx].append(np.sum(pred_knn_labels == knn_train_labels) / knn_train_labels.size)
     
     enable_distinguish = False
-    if opt.testid in [12,15,18,25,26,28]:
+    if opt.testid in [12,15,18,25,26,28,10,13,16]:
         enable_distinguish = True
         print("enable_distinguish taskid: "+str(opt.testid))
     if True:
