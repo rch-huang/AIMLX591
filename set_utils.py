@@ -28,12 +28,21 @@ dataset_num_classes = {
 def create_model(model_type: str,
                  method: str,
                  dataset: str,
+                 isPretrained=True,
                  **kwargs):
     if model_type == 'resnet18':
         if method == 'pnn':
             model = resnet18_pnn(dataset_num_classes[dataset])
+        if isPretrained == True:
+            #use pretrained dino weights
+            from torchvision.models import vit_b_16
+            dino = vit_b_16(weights='IMAGENET1K_V1')
+            dino.heads = torch.nn.Identity()
+            model = dino 
+            print("=> using resnet18 with dino pretrained weights")
         else:
             model = ResNet(BasicBlock, [2, 2, 2, 2], **kwargs)
+            print("=> training resnet18 from scratch")
     elif model_type == 'resnet34':
         model = ResNet(BasicBlock, [3, 4, 6, 3], **kwargs)
     elif model_type == 'resnet50':

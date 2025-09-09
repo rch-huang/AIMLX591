@@ -179,9 +179,14 @@ class ThreeCropTransform:
     """Create two crops of the same image"""
     def __init__(self, transform, size):
         self.transform = transform
+        self.transform = transforms.Compose([
+            transform
+            ,transforms.Resize((224,224))
+        ])
         self.notaug_transform = transforms.Compose([
             transforms.Resize(size=(size, size)),
-            transforms.ToTensor()
+            transforms.ToTensor(),
+            transforms.Resize((224,224)),
         ])
 
     def __call__(self, x):
@@ -205,7 +210,7 @@ class SeqSampler(Sampler):
         self.opt = copy_opt         
         # Configure the correct train_subset and val_subset
         if torch.is_tensor(dataset.targets):
-            self.labels = dataset.targets.detach().cpu().numpy()
+            self.labels = dataset.targets.detach().cpu()#.numpy()
         else:  # targets in cifar10 and cifar100 is a list
             self.labels = np.array(dataset.targets)
         self.classes = list(set(self.labels))
@@ -293,7 +298,7 @@ class SeqSampler(Sampler):
         num_of_classes = len(sample_idx)
         remaining_by_class = [len(sample_idx[i]) for i in range(num_of_classes)]
         total_size_by_class = [len(sample_idx[i]) for i in range(num_of_classes)]
-        batch_size = 1024
+        batch_size = 128
         while len(final_sample_idx) < sum(total_size_by_class):
             batch_idx = []
             for i in range(num_of_classes):
@@ -349,7 +354,7 @@ def redistribute_samples(sample_idx):
     return sample_idx
 
 
-def set_loader(opt):
+def set_loader(opt, CLOFAI_dataset_dict=None):
     # set seed for reproducing
     opt_trial = 0
     random.seed(opt_trial)
@@ -381,10 +386,11 @@ def set_loader(opt):
         transforms.ToTensor(),
         normalize,
     ])
-
+    
     if opt.dataset == 'cifar10':
         train_transform = transforms.Compose([
             transforms.RandomResizedCrop(size=opt.size, scale=(0.2, 1.)),
+            #transforms.RandomResizedCrop(size=(256,256), scale=(0.7, 1.)),
             transforms.RandomHorizontalFlip(),
             transforms.RandomApply([
                 transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)
@@ -396,6 +402,7 @@ def set_loader(opt):
         train_transform_runtime = transforms.Compose([
             transforms.ToPILImage(),
             transforms.RandomResizedCrop(size=opt.size, scale=(0.2, 1.)),
+            #transforms.RandomResizedCrop(size=(256,256), scale=(0.7, 1.)),
             transforms.RandomHorizontalFlip(),
             transforms.RandomApply([
                 transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)
@@ -404,17 +411,124 @@ def set_loader(opt):
             transforms.ToTensor(),
             normalize,
         ])
+         
+        if CLOFAI_dataset_dict is None: 
+            train_dataset = datasets.CIFAR10(root=opt.data_folder,
+                                            transform=ThreeCropTransform(train_transform, opt.size),
+                                            #transform=train_transform,
+                                            download=True,
+                                            train=True)
+            knn_train_dataset = datasets.CIFAR10(root=opt.data_folder,
+                                                train=True,
+                                                transform=val_transform)
+            val_dataset = datasets.CIFAR10(root=opt.data_folder,
+                                        train=False,
+                                        transform=val_transform)
+        else:
+            
+            CLOFAI_train_dataset = list(zip(CLOFAI_dataset_dict['train']['image'], CLOFAI_dataset_dict['train']['label'],CLOFAI_dataset_dict['train']['task']))
+            CLOFAI_val_dataset = list(zip(CLOFAI_dataset_dict['test']['image'], CLOFAI_dataset_dict['test']['label'],CLOFAI_dataset_dict['test']['task']))
 
-        train_dataset = datasets.CIFAR10(root=opt.data_folder,
-                                         transform=ThreeCropTransform(train_transform, opt.size),
-                                         download=True,
-                                         train=True)
-        knn_train_dataset = datasets.CIFAR10(root=opt.data_folder,
-                                             train=True,
-                                             transform=val_transform)
-        val_dataset = datasets.CIFAR10(root=opt.data_folder,
-                                       train=False,
-                                       transform=val_transform)
+            class CustomImageDataset:
+                def __init__(self, data, transform=None, label_type='long',
+                             MERGE_REAL_AS_ONE_CLASS=True,
+                             BALANCE_REAL_FAKE_COUNTS=True,
+                             UNIFORM_CLASS_COUNTS=150):
+                    
+
+
+                    self.images = []
+                    self.targets = []
+                    #tasks_set = ['task1','task2','task3','task4','task5']
+                    tasks_set = ['biggan','gaugan','imle','crn','wild']
+                    task2id = {task: idx for idx, task in enumerate(tasks_set)}
+                    real_imgs = {task:[] for task in tasks_set}
+
+                    counts_per_task = {}
+
+                    for img, label,task in data: 
+                            if label == 1:
+                                if MERGE_REAL_AS_ONE_CLASS:
+                                    multiclassed_label = task2id[task] + 1
+                                else:
+                                    multiclassed_label = task2id[task]*2 + 1
+                            else:
+                                if MERGE_REAL_AS_ONE_CLASS:   
+                                    multiclassed_label = 0
+                                else:
+                                    multiclassed_label = task2id[task]*2 
+                                if BALANCE_REAL_FAKE_COUNTS == 1:
+                                    real_imgs[task].append(img)
+                                    continue  
+                            if UNIFORM_CLASS_COUNTS>0:
+                                if multiclassed_label in counts_per_task.keys(): 
+                                    counts_per_task[multiclassed_label] += 1
+                                else:
+                                    counts_per_task[multiclassed_label] = 1
+                                if counts_per_task[multiclassed_label] > UNIFORM_CLASS_COUNTS:
+                                    continue
+                            self.images.append(img)
+                            self.targets.append(multiclassed_label)    
+                    if BALANCE_REAL_FAKE_COUNTS:
+                        real_size = int((len(self.images)/ len(real_imgs.keys()))/len(real_imgs.keys()))
+                        for task in real_imgs.keys():
+                            self.images += real_imgs[task][:real_size]
+                            self.targets += ([0]*real_size)
+                        
+                    if UNIFORM_CLASS_COUNTS>0:
+                        print('Class counts:', counts_per_task)
+                        
+                    dtype = torch.long if label_type == 'long' else torch.float
+                    self.targets = torch.tensor(self.targets, dtype=dtype)
+                    self.transform = transform
+                    print('Dataset size:', len(self.images))
+                    print('Classes Number:', len(set(self.targets)) )
+                    
+                def __len__(self):
+                    return len(self.images)
+                
+                def __getitem__(self, idx):
+                    image = self.images[idx]
+                    label = self.targets[idx]
+                    image = Image.fromarray(np.array(image))
+                    try: 
+                        if self.transform:
+                            image = self.transform(image)
+                    except Exception as e:
+                        print(e)
+                        print('error image:', self.images[idx])
+                        raise e
+                    return image, label
+            train_dataset = CustomImageDataset(
+                CLOFAI_train_dataset,
+                transform=ThreeCropTransform(train_transform, opt.size),
+                MERGE_REAL_AS_ONE_CLASS=False,
+                BALANCE_REAL_FAKE_COUNTS=False,
+                UNIFORM_CLASS_COUNTS=1200)
+            val_dataset = CustomImageDataset(
+                CLOFAI_val_dataset,
+                transform=val_transform,
+                MERGE_REAL_AS_ONE_CLASS=False,
+                BALANCE_REAL_FAKE_COUNTS=False,
+                UNIFORM_CLASS_COUNTS=100)
+            knn_train_dataset = CustomImageDataset(
+                CLOFAI_train_dataset,
+                transform=val_transform, 
+                MERGE_REAL_AS_ONE_CLASS=False,
+                BALANCE_REAL_FAKE_COUNTS=False,
+                UNIFORM_CLASS_COUNTS=100)
+
+
+            # train_dataset = datasets.CIFAR10(root=opt.data_folder,
+            #                                 transform=ThreeCropTransform(train_transform, opt.size),
+            #                                 download=True,
+            #                                 train=True)
+            # knn_train_dataset = datasets.CIFAR10(root=opt.data_folder,
+            #                                     train=True,
+            #                                     transform=val_transform)
+            # val_dataset = datasets.CIFAR10(root=opt.data_folder,
+            #                             train=False,
+            #                             transform=val_transform)
     elif opt.dataset == 'cifar100':
         train_transform = transforms.Compose([
             transforms.RandomResizedCrop(size=opt.size, scale=(0.2, 1.)),
@@ -474,15 +588,15 @@ def set_loader(opt):
             transforms.ToTensor(),
             normalize,
         ])
-
-        train_dataset = TinyImagenet(root=opt.data_folder + 'TINYIMG',
+        root_folder = "/home/rh539/SCALE/datasets/TINYIMG"
+        train_dataset = TinyImagenet(root=root_folder,#opt.data_folder + 'TINYIMG',
                                      transform=ThreeCropTransform(train_transform, opt.size),
                                      train=True,
                                      download=True)
-        knn_train_dataset = TinyImagenet(root=opt.data_folder + 'TINYIMG',
+        knn_train_dataset = TinyImagenet(root=root_folder,#opt.data_folder + 'TINYIMG',
                                          train=True,
                                          transform=val_transform)
-        val_dataset = TinyImagenet(root=opt.data_folder + 'TINYIMG',
+        val_dataset = TinyImagenet(root=root_folder,#opt.data_folder + 'TINYIMG',
                                    train=False,
                                    transform=val_transform)
 
@@ -526,10 +640,20 @@ def set_loader(opt):
 
     # Configure the a smaller subset as validation dataset
     if torch.is_tensor(train_dataset.targets):
-        labels = train_dataset.targets.detach().cpu().numpy()
+        labels = train_dataset.targets.detach().cpu()#.numpy()
     else:  # targets in cifar10 and cifar100 is a list
         labels = np.array(train_dataset.targets)
     num_labels = len(list(set(labels)))
+
+
+
+    def collate(batch):
+     
+        for ex in batch:
+            img = ex["image"]
+            if img.mode != "RGB":
+                ex["image"] = img.convert("RGB")
+        return batch
 
     # Create training loader
     if opt.training_data_type == 'iid':

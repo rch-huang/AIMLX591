@@ -149,19 +149,19 @@ fi
 
 if [ $2 = "tinyimagenet" ] ; then
   if [ $3 = "iid" ]; then
-    python3.7 main_supcon.py --criterion $1 --dataset $2 --model $model --training_data_type iid  \
+    python3 main_supcon.py --criterion $1 --dataset $2 --model $model --training_data_type iid  \
       --batch_size 128 --mem_samples $mem_samples --mem_size $mem_size \
-      --val_batch_size 64 --num_workers 8 --steps_per_batch_stream 10 --print_freq 10 --val_freq 4 --epochs 1 \
-      --learning_rate_stream $lr --temp_cont 0.1 --mem_w_labels \
-      --train_samples_per_cls 500 --test_samples_per_cls 50 --knn_samples_ratio 1.0 --trial $4
+      --val_batch_size 64 --num_workers 8 --steps_per_batch_stream 10 --print_freq 10  --epochs 1 \
+      --learning_rate_stream $lr --temp_cont 0.1 --mem_w_labels 1 \
+      --train_samples_per_cls 500 --test_samples_per_cls 50 --trial $4
   fi
 
   if [ $3 = "seq" ]; then
-    python3.7 main_supcon.py --criterion $1 --dataset $2 --model $model --training_data_type class_iid \
-      --batch_size 128 --mem_samples $mem_samples --mem_size $mem_size \
-      --val_batch_size 64 --num_workers 8 --steps_per_batch_stream 10 --print_freq 10 --val_freq 4 --epochs 1 \
-      --learning_rate_stream $lr --temp_cont 0.1 --mem_w_labels \
-      --train_samples_per_cls 500 --test_samples_per_cls 50 --knn_samples_ratio 1.0 --trial $4
+    python3 main_supcon.py --criterion $1 --dataset $2 --model $model --training_data_type class_iid \
+      --batch_size 128 --mem_samples 0 --mem_size 0 \
+      --val_batch_size 64 --num_workers 8 --steps_per_batch_stream 10 --print_freq 10  --epochs 1 \
+      --learning_rate_stream $lr --temp_cont 0.1 --mem_w_labels 0 \
+      --train_samples_per_cls 500 --test_samples_per_cls 50  --trial $4 --knn_samples 100
   fi
 
   if [ $3 = "seq-bl" ]; then

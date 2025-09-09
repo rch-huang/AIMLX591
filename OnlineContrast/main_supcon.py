@@ -162,8 +162,9 @@ def parse_option():
                         help='to scale the number of classes during evaluation')
     parser.add_argument('--plot', default=False, action="store_true",
                         help="whether to plot during evaluation")
-
+    parser.add_argument('--clofai_prefix', type=str, default='clofai',)
     opt = parser.parse_args()
+    #opt.dataset = "tinyimagenet"
     if opt.mem_w_labels == 0:
         opt.mem_w_labels = False
     else:
@@ -182,9 +183,20 @@ def parse_option():
             opt.mem_cluster_type = 'max_coverage'
         if opt.lifelong_id == 4:
             opt.mem_cluster_type = 'none'
-         
-
-    
+    if opt.testid == 51:
+          opt.mem_cluster_type = 'kmeans'
+    if opt.testid == 52:
+          opt.mem_cluster_type = 'spectral'
+    if opt.testid == 53:
+          opt.mem_cluster_type = 'psa'
+    if opt.testid == 54:
+          opt.mem_cluster_type = 'maximin'
+    if opt.testid == 55:
+          opt.mem_cluster_type = 'energy'
+    if opt.mem_size == 40960 and opt.mem_w_labels and opt.criterion == 'supcon':
+        opt.mem_update_type = "reservoir"
+    if opt.testid == 81:
+        opt.mem_w_labels = False
     # check if dataset is path that passed required arguments
     if opt.dataset == 'path':
         assert opt.data_folder is not None \
@@ -193,7 +205,7 @@ def parse_option():
 
     # set the path according to the environment
     if opt.data_folder is None:
-        opt.data_folder = '../datasets/'
+        opt.data_folder = '/Scratch/repository/rh539/'#'../datasets/'
     opt.model_path = './save/{}_models/'.format(opt.dataset)
     opt.tb_path = './save/{}_tensorboard/'.format(opt.dataset)
 
@@ -248,10 +260,22 @@ def train_step(images, labels, models, criterions, optimizer,
 
     # get augmented streaming and augmented samples and concatenate them
     if opt.mem_samples > 0 and mem_images is not None:
-        sample_cnt = min(opt.mem_samples, mem_images.shape[0])
-        select_ind = np.random.choice(mem_images.shape[0], sample_cnt, replace=False)
+        if opt.mem_size == 40960 and opt.mem_w_labels and opt.criterion == 'supcon':
+            mem_true_labels_numpy = mem_true_labels.detach().numpy()
+            lb_set = set(mem_true_labels_numpy)
+            cls_count = [np.sum(mem_true_labels_numpy == i) for i in lb_set]
+            sample_cnt = min(cls_count)
+            sample_cnt = min(102, sample_cnt)
+            select_ind = []
+            #select_ind is randomly choice from each class to make sure each class has the same number of samples, aka sample_cnt
+            for i in lb_set:
+                select_ind += np.random.choice(np.where(mem_true_labels_numpy == i)[0], sample_cnt, replace=False).tolist()
+            select_ind = np.array(select_ind)
+        else:
+            sample_cnt = min(opt.mem_samples, mem_images.shape[0])
+            select_ind = np.random.choice(mem_images.shape[0], sample_cnt, replace=False)
         mem_true_labels = mem_true_labels[select_ind]
-        print("count of memory samples "+str(select_ind.shape))
+        #print("count of memory samples "+str(select_ind.shape))
         # Augment memory samples
         aug_mem_images_0 = torch.stack([train_transform(ee.cpu() * 255)
                                         for ee in mem_images[select_ind]])
@@ -354,7 +378,7 @@ def train(train_loader, test_loader, knntrain_loader,
           train_transform, model, criterions, optimizer, epoch,
           opt, mem, logger, task_list):
     """training of one epoch on single-pass of data"""
-
+    clofai_prefix = opt.clofai_prefix
     batch_time = AverageMeter()
     data_time = AverageMeter()
     forward_time = AverageMeter()
@@ -380,12 +404,13 @@ def train(train_loader, test_loader, knntrain_loader,
     #opt.stats = {"times_cls":{},"times_mem_cls":{},"acc_knn_training_set":{},"acc_val_set":{},"spectral_acc":{}}
     seen_classes = []#[0,1,2,3,4,5,6,7,8,9]
     for idx, (images, labels) in enumerate(train_loader):
-        print("RANDOM data "+str(idx)+" "+str(torch.mean(images[0][1]).item()))
+        #print("RANDOM data "+str(idx)+" "+str(torch.mean(images[0][1]).item()))
 
         labels_set = set(labels)
         for label in labels_set:
             if label not in seen_classes:
                 seen_classes.append(label)
+                #images[labels.index(label)].save(os.path.join('./',clofai_prefix+'first_appear_cls_'+str(label)+'.jpg'))
 
         np_labels = np.array(labels)
         cls_to_distinguish = [cls for cls in set(labels)]
@@ -413,10 +438,13 @@ def train(train_loader, test_loader, knntrain_loader,
         for _ in range(opt.steps_per_batch_stream):
             
             index_of_steps_since_beginning = _+opt.steps_per_batch_stream*idx+(epoch-1)*len(train_loader)
-            if _ == 0 or True:
-                opt.stats["times_cls"][index_of_steps_since_beginning] = [np.sum(np_labels==i) for i in range(10)]
-                opt.stats["times_mem_cls"][index_of_steps_since_beginning] = [0 for i in range(10)]
-                print(str(index_of_steps_since_beginning) +" cls "+str(opt.stats["times_cls"][index_of_steps_since_beginning]))
+            if True:
+                opt.stats["times_cls"][index_of_steps_since_beginning] = [np.sum(np_labels==i) for i in range(dataset_num_classes[opt.dataset])]
+                opt.stats["times_mem_cls"][index_of_steps_since_beginning] = [0 for i in range(dataset_num_classes[opt.dataset])]
+                if _ == 0:
+                    print(str(index_of_steps_since_beginning) +" cls "+str(opt.stats["times_cls"][index_of_steps_since_beginning]))
+                    with open(os.path.join('./',clofai_prefix+'cls.csv'), 'a+') as f:
+                        f.write(f"{','.join(map(str, opt.stats['times_cls'][index_of_steps_since_beginning]))}\n") 
             # if isinstance(images, list):
             #     imagess = torch.stack(images)  # Convert list of images to a tensor
             # current_batch_size = 1024
@@ -434,9 +462,13 @@ def train(train_loader, test_loader, knntrain_loader,
                 for mem_true_label in mem_true_labels:
                         opt.stats["times_mem_cls"][index_of_steps_since_beginning][mem_true_label] += 1 
                 print(str(index_of_steps_since_beginning) +" mem "+str(opt.stats["times_mem_cls"][index_of_steps_since_beginning])) 
-            if _ == 9 or _ == 19:
+
+                if _ == 0:
+                    with open(os.path.join('./',clofai_prefix+'cls_mem.csv'), 'a+') as f:
+                        f.write(f"{','.join(map(str, opt.stats['times_mem_cls'][index_of_steps_since_beginning]))}\n") 
+            if  _== opt.steps_per_batch_stream-1:
                 validate(test_loader, knntrain_loader, model, optimizer,
-                     opt, mem, cur_stream_step, epoch, logger, task_list,index_of_steps_since_beginning,cls_to_distinguish,seen_classes)
+                     opt, mem, cur_stream_step, epoch, logger, task_list,index_of_steps_since_beginning,cls_to_distinguish,seen_classes,clofai_prefix=clofai_prefix)
             # tensorboard logger
             logger.log_value('learning_rate',
                              optimizer.param_groups[0]['lr'],
@@ -455,7 +487,7 @@ def train(train_loader, test_loader, knntrain_loader,
             cur_stream_step += 1
 
             # print info
-            if cur_stream_step % 10 == 0 and False:
+            if cur_stream_step % 10 == 0:
                 print('Train stream: [{step_idx}/{0}/{1}]\t'
                       'loss {2}\t'
                       'loss_contrast {3}\t'
@@ -505,7 +537,7 @@ def normalize_embeddings(embeddings):
     
     return normalized_embeddings
 def validate(test_loader, knn_train_loader, model, optimizer,
-             opt, mem, cur_step, epoch, logger, task_list,idx_training_step,cls_to_distinguish=[],seen_classes=[]):
+             opt, mem, cur_step, epoch, logger, task_list,idx_training_step,cls_to_distinguish=[],seen_classes=[],clofai_prefix=''):
     """validation, evaluate k-means clustering accuracy and plot t-SNE"""
     model.eval()
     test_labels, val_labels, knn_labels = [], [], []
@@ -559,13 +591,16 @@ def validate(test_loader, knn_train_loader, model, optimizer,
             test_embeddings = np.concatenate((test_embeddings, embeddings), axis=0)
         test_labels += labels.detach().tolist()
     test_labels = np.array(test_labels).astype(int)
-    print([np.sum(test_labels==i) for i in range(10)])
+    print('number of samples per class in test set: {}'.format(
+        [np.sum(test_labels == i) for i in range(len(np.unique(test_labels)))])   )
+    
+    #print(f"NumberOfSamples per TestClass {[np.sum(test_labels==i) for i in range(dataset_num_classes[opt.dataset])]}")
     # Unsupervised clustering
     #cluster_eval(test_embeddings, test_labels, opt, mem, cur_step, epoch, logger,idx_training_step)
 
     # kNN classification
     knn_eval(test_embeddings, test_labels, knn_embeddings, knn_labels,
-             opt, mem, cur_step, epoch, logger,idx_training_step,cls_to_distinguish,seen_classes)
+             opt, mem, cur_step, epoch, logger,idx_training_step,cls_to_distinguish,seen_classes,clofai_prefix)
     #knn_task_eval(test_embeddings, test_labels, knn_embeddings, knn_labels,
     #              opt, mem, cur_step, epoch, logger, task_list)
 
@@ -604,7 +639,14 @@ def main():
                                   opt.lifelong_method,
                                   opt.dataset,
                                   opt.ckpt)
-    train_loader, test_loader, knntrain_loader, train_transform = set_loader(opt)
+    import datasets
+    CLOFAI_dataset_dict = datasets.load_dataset("willd98/CLOFAI")
+    from CDDB_dataset import CDDB_dataset
+    CDDB_dataset = None#CDDB_dataset()
+    #CLOFAI_dataset_dict = None
+    #train_loader, test_loader, knntrain_loader, train_transform = set_loader(opt,CLOFAI_dataset_dict)
+    print('Loading dataset: '+str(opt.dataset))
+    train_loader, test_loader, knntrain_loader, train_transform = set_loader(opt,CDDB_dataset)
 
     if True:
         all_weights = []

@@ -74,9 +74,11 @@ class Memory(object):
             select_ind: numpy array of the list of indices that are selected in
                 the ind th memory bin
         """
+        #print("sampling memory from cls "+str(lb) + "  "+str(old_sz) + "  "+str(new_sz) + "  "+str(sz_per_lb))
         ind = self.labels_set.index(lb)
         select_ind = np.arange(old_sz + new_sz)
         # Memory Update - sample selection
+        self.sample_type = 'reservoir'
         if old_sz + new_sz > sz_per_lb:
             if self.sample_type == 'rdn':
                 select_ind = np.random.choice(old_sz + new_sz, sz_per_lb,
@@ -208,6 +210,8 @@ class Memory(object):
         all_embeddings = model(feed_images).detach().cpu().numpy()
         # all_embeddings_mean = np.mean(all_embeddings, axis=0, keepdims=True)
         # all_embeddings = (all_embeddings - all_embeddings_mean) * 1e4
+        
+
         if self.cluster_type == 'none':
             # One big cluster for all samples
             # The key is transfer lb - the pseudo label
