@@ -8,9 +8,9 @@ import time
 import numpy as np
 import random
 from tqdm import tqdm
-
-import tensorboard_logger as tb_logger
-
+import json
+import tensorboard_logger as tb_logger 
+ 
 from util import AverageMeter
 
 from memory import Memory
@@ -106,11 +106,13 @@ def parse_option():
     parser.add_argument('--criterion', type=str, default='supcon',
                         choices=['supcon', 'simclr', 'scale'],
                         help='major criterion')
+    parser.add_argument('--mask_memory', type=int, default=1,
+                        help="whether mask memory samples in contrastive loss")
     parser.add_argument('--lifelong_id', type=int, default=0,
                         help='id for lifelong learning method') #0 none, 2 scale, 1 co2l    
                                              
-    parser.add_argument('--lifelong_method', type=str, default='none',
-                        choices=['none', 'scale', 'co2l', 'cassle'],
+    parser.add_argument('--distill_enabled', type=str, default='none',
+                        choices=['none', 'scale', 'co2l'],
                         help='choose lifelong learning method')
     parser.add_argument('--simil', type=str, default='tSNE',
                         choices=['tSNE', 'kNN'],
@@ -164,64 +166,30 @@ def parse_option():
                         help="whether to plot during evaluation")
     parser.add_argument('--clofai_prefix', type=str, default='clofai',)
     opt = parser.parse_args()
-    #opt.dataset = "tinyimagenet"
-    if opt.mem_w_labels == 0:
-        opt.mem_w_labels = False
-    else:
-        opt.mem_w_labels = True
-    if opt.lifelong_id == 0:
-        opt.lifelong_method = 'none'
-    elif opt.lifelong_id == 1:
-        opt.lifelong_method = 'co2l'
-    elif opt.lifelong_id in [2, 3, 4]: 
-        #2 scale  + distill + max_coverage;
-        #3 sclae  + no distill + max_coverage;
-        #4 sclae  + no distill + none;
-
-        opt.lifelong_method = 'scale'
-        if opt.lifelong_id == 2 or opt.lifelong_id == 3:
-            opt.mem_cluster_type = 'max_coverage'
-        if opt.lifelong_id == 4:
-            opt.mem_cluster_type = 'none'
-    if opt.testid == 51:
-          opt.mem_cluster_type = 'kmeans'
-    if opt.testid == 52:
-          opt.mem_cluster_type = 'spectral'
-    if opt.testid == 53:
-          opt.mem_cluster_type = 'psa'
-    if opt.testid == 54:
-          opt.mem_cluster_type = 'maximin'
-    if opt.testid == 55:
-          opt.mem_cluster_type = 'energy'
-    if opt.mem_size == 40960 and opt.mem_w_labels and opt.criterion == 'supcon':
-        opt.mem_update_type = "reservoir"
-    if opt.testid == 81:
-        opt.mem_w_labels = False
-    # check if dataset is path that passed required arguments
+    
+     
     if opt.dataset == 'path':
         assert opt.data_folder is not None \
                and opt.mean is not None \
                and opt.std is not None
 
-    # set the path according to the environment
+ 
     if opt.data_folder is None:
+        #raise ValueError('need to specify data path for dataset {}'.format(opt.dataset))
         opt.data_folder = '/Scratch/repository/rh539/'#'../datasets/'
     opt.model_path = './save/{}_models/'.format(opt.dataset)
     opt.tb_path = './save/{}_tensorboard/'.format(opt.dataset)
 
-    # iterations = opt.lr_decay_epochs.split(',')
-    # opt.lr_decay_epochs = list([])
-    # for it in iterations:
-    #     opt.lr_decay_epochs.append(int(it))
-
+     
     if len(opt.train_samples_per_cls) == 1:
         im_ind = opt.train_samples_per_cls[0]
     else:
         im_ind = 'im'
-
-    opt.model_name = '{}_{}_{}_{}_{}_{}_{}_s{}_{}_{}_lrs_{}_bsz_{}_mem_{}_{}_{}_{}_{}_{}_temp_{}_' \
+    from datetime import datetime
+    opt.model_name = 'Model_{}_{}_{}_{}_{}_{}_{}_{}_s{}_{}_{}_lrs_{}_bsz_{}_mem_{}_{}_{}_{}_{}_{}_temp_{}_' \
                      'simil_{}_{}_{}_distill_{}_{}_{}_steps_{}_epoch_{}_trial_{}'.format(
-        opt.lifelong_method, opt.criterion, opt.dataset, opt.model,
+        datetime.now().strftime("%m%d%H%M%S") ,               
+        opt.distill_enabled, opt.criterion, opt.dataset, opt.model,
         opt.training_data_type, opt.blend_ratio, opt.n_concurrent_classes,
         im_ind, opt.test_samples_per_cls, opt.knn_samples,
         opt.learning_rate_stream, opt.batch_size, opt.mem_samples,
@@ -235,14 +203,11 @@ def parse_option():
         os.makedirs(opt.tb_folder)
 
     opt.save_folder = os.path.join(opt.model_path, opt.model_name)
-    from datetime import datetime
-    opt.save_folder = os.path.join(opt.save_folder, datetime.now().strftime("%m%d%H%M%S"))
-
     if not os.path.isdir(opt.save_folder):
         os.makedirs(opt.save_folder)
 
 
-    opt.logfilename = 'Date_'+str(datetime.now().strftime('%Y%m%d_%H_%M_%S'))+'#Criterion_'+str(opt.criterion)+'#LifelongMethod_'+str(opt.lifelong_method)+'#Steps_'+str(opt.steps_per_batch_stream)+"#BatchSize_"+str(opt.batch_size)+'#Epochs_'+str(opt.epochs)+'#Mem_'+str(opt.mem_samples)
+    opt.logfilename = 'Date_'+str(datetime.now().strftime('%Y%m%d_%H_%M_%S'))+'#Criterion_'+str(opt.criterion)+'#LifelongMethod_'+str(opt.distill_enabled)+'#Steps_'+str(opt.steps_per_batch_stream)+"#BatchSize_"+str(opt.batch_size)+'#Epochs_'+str(opt.epochs)+'#Mem_'+str(opt.mem_samples)
     return opt
 
 
@@ -260,28 +225,30 @@ def train_step(images, labels, models, criterions, optimizer,
 
     # get augmented streaming and augmented samples and concatenate them
     if opt.mem_samples > 0 and mem_images is not None:
-        if opt.mem_size == 40960 and opt.mem_w_labels and opt.criterion == 'supcon':
-            mem_true_labels_numpy = mem_true_labels.detach().numpy()
-            lb_set = set(mem_true_labels_numpy)
-            cls_count = [np.sum(mem_true_labels_numpy == i) for i in lb_set]
-            sample_cnt = min(cls_count)
-            sample_cnt = min(102, sample_cnt)
-            select_ind = []
-            #select_ind is randomly choice from each class to make sure each class has the same number of samples, aka sample_cnt
-            for i in lb_set:
-                select_ind += np.random.choice(np.where(mem_true_labels_numpy == i)[0], sample_cnt, replace=False).tolist()
-            select_ind = np.array(select_ind)
+        if opt.mem_size == -1 :#Unlimited Memory Size   #40960 and opt.mem_w_labels and opt.criterion == 'supcon':
+            # mem_true_labels_numpy = mem_true_labels.detach().numpy()
+            # lb_set = set(mem_true_labels_numpy)
+            # cls_count = [np.sum(mem_true_labels_numpy == i) for i in lb_set]
+            # sample_cnt = min(cls_count)
+            # sample_cnt = min(102, sample_cnt)
+            # select_ind = []
+            # #select_ind is randomly choice from each class to make sure each class has the same number of samples, aka sample_cnt
+            # for i in lb_set:
+            #     select_ind += np.random.choice(np.where(mem_true_labels_numpy == i)[0], sample_cnt, replace=False).tolist()
+            # select_ind = np.array(select_ind)
+            raise NotImplementedError("Unlimited Memory Size not implemented")
         else:
             sample_cnt = min(opt.mem_samples, mem_images.shape[0])
             select_ind = np.random.choice(mem_images.shape[0], sample_cnt, replace=False)
         mem_true_labels = mem_true_labels[select_ind]
-        #print("count of memory samples "+str(select_ind.shape))
+      
         # Augment memory samples
         aug_mem_images_0 = torch.stack([train_transform(ee.cpu() * 255)
                                         for ee in mem_images[select_ind]])
         aug_mem_images_1 = torch.stack([train_transform(ee.cpu() * 255)
                                         for ee in mem_images[select_ind]])
-        # print('aug mem image', aug_mem_images[0][1:10])
+        # restore 0-1 to 0-255
+
         feed_images_0 = torch.cat([images[0], aug_mem_images_0], dim=0)
         feed_images_1 = torch.cat([images[1], aug_mem_images_1], dim=0)
         feed_labels = torch.cat([labels, mem_labels[select_ind]], dim=0)
@@ -295,14 +262,14 @@ def train_step(images, labels, models, criterions, optimizer,
         feed_images_1 = feed_images_1.cuda(non_blocking=True)
         feed_labels = feed_labels.cuda(non_blocking=True)
 
-    feed_images_all = torch.cat([feed_images_0, feed_images_1], dim=0)
+    
     bsz = feed_images_0.shape[0]
     
     model.train()
     start = time.time()
 
     loss_distill = .0
-    if opt.lifelong_method == 'none':
+    if opt.distill_enabled == 'none':
 
         if opt.criterion == 'supcon':
             loss_contrast = criterion(model, model, feed_images_0, feed_images_1,
@@ -313,7 +280,7 @@ def train_step(images, labels, models, criterions, optimizer,
 
         # print(loss_contrast)
 
-    elif opt.lifelong_method == 'scale':
+    elif opt.distill_enabled == 'scale':
         if opt.lifelong_id == 3 or opt.lifelong_id == 4:
             f0_logits, loss_distill = criterion_reg(model, past_model,
                                                 feed_images_0)
@@ -321,12 +288,13 @@ def train_step(images, labels, models, criterions, optimizer,
             pair_comp_time.update(time.time() - start)
 
         #contrast_mask = similarity_mask_new(opt.batch_size, f0_logits, opt, pos_pairs)
+        feed_images_all = torch.cat([feed_images_0, feed_images_1], dim=0)
         features_all = model(feed_images_all)
         contrast_mask = similarity_mask_old(features_all, bsz, opt, pos_pairs)
         loss_contrast = criterion(model, model, feed_images_0, feed_images_1,
                                   mask=contrast_mask)
 
-    elif opt.lifelong_method == 'co2l':
+    elif opt.distill_enabled == 'co2l':
 
         f0_logits, loss_distill = criterion_reg(model, past_model,
                                                 feed_images_0)
@@ -334,15 +302,14 @@ def train_step(images, labels, models, criterions, optimizer,
         if opt.criterion == 'supcon':
             loss_contrast = criterion(model, model, feed_images_0, feed_images_1,
                              labels=feed_labels)
-        else:
+        elif opt.criterion == 'simclr':
             loss_contrast = criterion(model, model, feed_images_0, feed_images_1)
-
-    elif opt.lifelong_method == 'cassle':
-
-        loss_contrast = criterion(model, model, feed_images_0, feed_images_1)
+        else:
+            raise ValueError('contrastive method not supported: {}'.format(opt.criterion))
+     
 
     else:
-        raise ValueError('contrastive method not supported: {}'.format(opt.lifelong_method))
+        raise ValueError('contrastive method not supported: {}'.format(opt.distill_enabled))
 
 
     losses_contrast.update(loss_contrast.item(), bsz)
@@ -368,7 +335,7 @@ def train_step(images, labels, models, criterions, optimizer,
         return
 
 train_step.distill_power = 0.0
-import json
+
 def convert_types(obj):
             if isinstance(obj, np.int64):
                 return int(obj)
@@ -404,7 +371,8 @@ def train(train_loader, test_loader, knntrain_loader,
     #opt.stats = {"times_cls":{},"times_mem_cls":{},"acc_knn_training_set":{},"acc_val_set":{},"spectral_acc":{}}
     seen_classes = []#[0,1,2,3,4,5,6,7,8,9]
     for idx, (images, labels) in enumerate(train_loader):
-        #print("RANDOM data "+str(idx)+" "+str(torch.mean(images[0][1]).item()))
+        # len(images) == 3, two augmented images and one original image
+    
 
         labels_set = set(labels)
         for label in labels_set:
@@ -429,9 +397,7 @@ def train(train_loader, test_loader, knntrain_loader,
         # record a snapshot of the model as past model
         past_model = copy.deepcopy(model)
         past_model.eval()
-        if opt.lifelong_method == 'cassle':
-            criterion, _ = criterions
-            criterion.freeze_backbone(model)
+         
 
         models = [model, past_model]
         # compute loss
@@ -499,11 +465,6 @@ def train(train_loader, test_loader, knntrain_loader,
                     losses_distill.avg * train_step.distill_power,
                     step_idx=_,
                     pos_pair=pos_pairs_stream))
-                # print('Forward time {}\tloss time {}\t'
-                #       'pairwise comp time {}\tmemory update time {}'.format(
-                #     forward_time.avg, loss_time.avg,
-                #     pair_comp_time.avg, mem_update_time.avg
-                # ))
                 sys.stdout.flush()
 
         # update memory
@@ -626,17 +587,13 @@ def main():
     print("============================================")
 
     # set seed for reproducing
-    
 
-    # build data loader
-    
     random.seed(opt.trial)
     np.random.seed(opt.trial)
     torch.manual_seed(opt.trial)
     
     # build model
     model = load_student_backbone(opt.model,
-                                  opt.lifelong_method,
                                   opt.dataset,
                                   opt.ckpt)
     import datasets
@@ -648,21 +605,12 @@ def main():
     print('Loading dataset: '+str(opt.dataset))
     train_loader, test_loader, knntrain_loader, train_transform = set_loader(opt,CDDB_dataset)
 
-    if True:
-        all_weights = []
-        for param in model.parameters():
-            if param.requires_grad:   
-                all_weights.append(param.flatten())
-
-        all_weights = torch.cat(all_weights)
-
-        mean_value = torch.mean(all_weights).item()
-        print("Random Seed effect for initial weights: "+str(mean_value))
-    # build criterion
+    
+    
     criterion, criterion_reg = get_loss(opt)
     criterions = [criterion, criterion_reg]
 
-    # build optimizer
+    
     optimizer = set_optimizer(opt.learning_rate_stream,
                               opt.momentum,
                               opt.weight_decay,
@@ -674,7 +622,8 @@ def main():
 
     # tensorboard
     logger = tb_logger.Logger(logdir=opt.tb_folder, flush_secs=2)
-
+    tb_logger.configure("tb_test", flush_secs=5)
+    tb_logger.log_value('test_property',1,0)
     batches_per_epoch = len(train_loader)
     steps_per_epoch_stream = opt.steps_per_batch_stream * batches_per_epoch
 

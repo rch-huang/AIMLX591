@@ -4,12 +4,14 @@ from .simclr import SimCLRLoss
 
 def get_loss(opt):
     if opt.criterion == 'simclr':
-        criterion = SimCLRLoss(model=opt.model,
-                               lifelong_method=opt.lifelong_method,
+        criterion = SimCLRLoss(stream_bsz=opt.batch_size,
+                               model=opt.model,
+                               mask_memory=opt.mask_memory,
                                temperature=opt.temp_cont)
     elif opt.criterion == 'supcon' or opt.criterion == 'scale':
         criterion = SupConLoss(stream_bsz=opt.batch_size,
                                model=opt.model,
+                               mask_memory=opt.mask_memory,
                                temperature=opt.temp_cont)
     else:
         raise ValueError('loss method not supported: {}'.format(opt.criterion))

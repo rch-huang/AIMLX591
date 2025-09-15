@@ -179,14 +179,9 @@ class ThreeCropTransform:
     """Create two crops of the same image"""
     def __init__(self, transform, size):
         self.transform = transform
-        self.transform = transforms.Compose([
-            transform
-            ,transforms.Resize((224,224))
-        ])
         self.notaug_transform = transforms.Compose([
             transforms.Resize(size=(size, size)),
-            transforms.ToTensor(),
-            transforms.Resize((224,224)),
+            transforms.ToTensor()
         ])
 
     def __call__(self, x):
@@ -195,22 +190,17 @@ class ThreeCropTransform:
 
 class SeqSampler(Sampler):
     def __init__(self, dataset, blend_ratio, n_concurrent_classes,
-                 train_samples_per_cls,opt):
+                 train_samples_per_cls,longtailed=0.0):
         """data_source is a Subset"""
         self.num_samples = len(dataset)
         self.blend_ratio = blend_ratio
         self.n_concurrent_classes = n_concurrent_classes
         self.train_samples_per_cls = train_samples_per_cls
-        if opt.longtailed:
-            self.longtailed = True
-        else:
-            self.longtailed = False
-        copy_opt = copy.deepcopy(opt)
-        copy_opt.trial = 0
-        self.opt = copy_opt         
+        self.longtailed = longtailed
+              
         # Configure the correct train_subset and val_subset
         if torch.is_tensor(dataset.targets):
-            self.labels = dataset.targets.detach().cpu()#.numpy()
+            self.labels = dataset.targets.detach().cpu().numpy()
         else:  # targets in cifar10 and cifar100 is a list
             self.labels = np.array(dataset.targets)
         self.classes = list(set(self.labels))
@@ -356,10 +346,10 @@ def redistribute_samples(sample_idx):
 
 def set_loader(opt, CLOFAI_dataset_dict=None):
     # set seed for reproducing
-    opt_trial = 0
-    random.seed(opt_trial)
-    np.random.seed(opt_trial)
-    torch.manual_seed(opt_trial)
+     
+    random.seed(opt.trial)
+    np.random.seed(opt.trial)
+    torch.manual_seed(opt.trial)
 
     # construct data loader
     if opt.dataset == 'cifar10':

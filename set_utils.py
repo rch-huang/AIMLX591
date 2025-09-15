@@ -25,14 +25,13 @@ dataset_num_classes = {
     'mnist': 10
 }
 
-def create_model(model_type: str,
-                 method: str,
+def create_model(model_type: str, 
                  dataset: str,
-                 isPretrained=True,
+                 isPretrained=False,
                  **kwargs):
     if model_type == 'resnet18':
-        if method == 'pnn':
-            model = resnet18_pnn(dataset_num_classes[dataset])
+        # if method == 'pnn':
+        #     model = resnet18_pnn(dataset_num_classes[dataset])
         if isPretrained == True:
             #use pretrained dino weights
             from torchvision.models import vit_b_16
@@ -58,7 +57,6 @@ def create_model(model_type: str,
 
 
 def load_student_backbone(model_type: str,
-                          method: str,
                           dataset: str,
                           ckpt: str,
                           **kwargs):
@@ -66,7 +64,7 @@ def load_student_backbone(model_type: str,
     Load student model of model_type and pretrained weights from ckpt.
     """
     # Set models
-    model = create_model(model_type, method, dataset, **kwargs)
+    model = create_model(model_type, dataset, **kwargs)
 
     model = torch.nn.DataParallel(model)
 

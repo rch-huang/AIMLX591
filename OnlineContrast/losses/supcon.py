@@ -36,10 +36,12 @@ class SupConLoss(nn.Module):
     It also supports the unsupervised contrastive loss in SimCLR"""
     def __init__(self,
                  stream_bsz,
+                 mask_memory = True,
                  model='resnet50',
                  temperature=0.07,
                  base_temperature=0.07):
         super(SupConLoss, self).__init__()
+        self.mask_memory = mask_memory
         self.stream_bsz = stream_bsz
         self.temperature = temperature
         self.base_temperature = base_temperature
@@ -96,7 +98,7 @@ class SupConLoss(nn.Module):
         logits = anchor_dot_contrast - logits_max.detach()
 
         # tile mask
-        mask = mask.repeat(2, 2)
+        mask = mask.repeat(2, 2)   # shape from [bsz, bsz] to [2*bsz, 2*bsz]
         # mask-out self-contrast cases
         logits_mask = torch.scatter(
             torch.ones_like(mask),
@@ -104,11 +106,11 @@ class SupConLoss(nn.Module):
             torch.arange(batch_size * 2).view(-1, 1).to(device),
             0
         )
-        mask = mask * logits_mask
+        mask = mask * logits_mask  # still mask except for 0s on diagonal
 
         # compute log_prob
-        exp_logits = torch.exp(logits) * logits_mask
-        log_prob = logits - torch.log(exp_logits.sum(1, keepdim=True))
+        exp_logits = torch.exp(logits) * logits_mask # exclude self-contrast cases
+        log_prob = logits - torch.log(exp_logits.sum(1, keepdim=True)) # softmax
 
         # compute mean of log-likelihood over positive
         mean_log_prob_pos = (mask * log_prob).sum(1) / (mask.sum(1) + 1e-10)
@@ -116,10 +118,13 @@ class SupConLoss(nn.Module):
 
         # loss
         loss = - (self.temperature / self.base_temperature) * mean_log_prob_pos
-        loss = loss.view(2, batch_size)
-        stream_mask = torch.zeros_like(loss).float().to(device)
-        stream_mask[:, :self.stream_bsz] = 1
-        loss = (stream_mask * loss).sum() / stream_mask.sum()
+        if self.mask_memory:
+            loss = loss.view(2, batch_size)
+            stream_mask = torch.zeros_like(loss).float().to(device)
+            stream_mask[:, :self.stream_bsz] = 1
+            loss = (stream_mask * loss).sum() / stream_mask.sum()
+        else:
+            loss = loss.mean()
         return loss
 
 

@@ -19,21 +19,7 @@ model_dim_dict = {
     'cnn': 128
 }
 
-class CaSSLe_Predictor(nn.Module):
-    def __init__(self, distill_proj_hidden_dim,
-                 dim_in=128):
-        super().__init__()
-        self.distill_predictor = nn.Sequential(
-            nn.Linear(dim_in, distill_proj_hidden_dim),
-            nn.BatchNorm1d(distill_proj_hidden_dim),
-            nn.ReLU(),
-            nn.Linear(distill_proj_hidden_dim, dim_in),
-        )
-
-    def forward(self, x):
-        return self.distill_predictor(x)
-
-
+ 
 class projection_MLP(nn.Module):
     def __init__(self, dim_in, head='mlp', feat_dim=128):
         super().__init__()
@@ -57,8 +43,9 @@ class projection_MLP(nn.Module):
 class SimCLRLoss(nn.Module):
     """Two-way SimCLR loss"""
     def __init__(self,
+                 stream_bsz,
                  model='resnet50',
-                 lifelong_method='none',
+                 mask_memory=True,
                  temperature=0.07,
                  base_temperature=0.07,
                  distill_lamb=1,
@@ -66,6 +53,8 @@ class SimCLRLoss(nn.Module):
                  distill_temperature=0.2
                  ):
         super(SimCLRLoss, self).__init__()
+        self.stream_bsz = stream_bsz
+        self.mask_memory = mask_memory
         self.device = (torch.device('cuda')
                   if torch.cuda.is_available()
                   else torch.device('cpu'))
@@ -78,9 +67,8 @@ class SimCLRLoss(nn.Module):
         dim_in = model_dim_dict[model]
         self.projector = projection_MLP(dim_in)
 
-        self.cassle = (lifelong_method == 'cassle')
-        if self.cassle:
-            self.cassle_predictor = CaSSLe_Predictor(distill_proj_hidden_dim)
+        
+       
         self.frozen_backbone = None
 
     def freeze_backbone(self, backbone):
@@ -122,8 +110,16 @@ class SimCLRLoss(nn.Module):
 
         # loss
         loss = - (temperature / self.base_temperature) * mean_log_prob_pos
-        loss = loss.mean()  # loss.view(2, batch_size).mean()
-
+        if self.mask_memory:
+            loss = loss.view(2, batch_size)
+            device = (torch.device('cuda')
+                      if z_stu.is_cuda
+                      else torch.device('cpu'))
+            stream_mask = torch.zeros_like(loss).float().to(device)
+            stream_mask[:, :self.stream_bsz] = 1
+            loss = (stream_mask * loss).sum() / stream_mask.sum()
+        else:
+            loss = loss.mean()
         return loss
 
     def forward(self, backbone_stu, backbone_tch, x_stu, x_tch):
@@ -143,20 +139,6 @@ class SimCLRLoss(nn.Module):
 
         loss = self.loss(z_stu, z_tch, temperature=self.temperature)
 
-        # compute the cassle distillation loss if using cassle
-        if self.cassle:
-            assert self.frozen_backbone is not None, 'frozen encoder has not been created yet'
-            p_stu = F.normalize(self.cassle_predictor(z_stu), dim=1)
-            p_tch = F.normalize(self.cassle_predictor(z_tch), dim=1)
-            p = torch.cat([p_stu, p_tch], dim=1)
-            z_stu_frozen = F.normalize(self.projector(self.frozen_backbone(x_stu)), dim=1)
-            z_tch_frozen = F.normalize(self.projector(self.frozen_backbone(x_tch)), dim=1)
-            z = torch.cat([z_stu_frozen, z_tch_frozen], dim=1)
-            loss_distill = (self.loss(p, z, temperature=self.distill_temperature) +
-                            self.loss(z, p, temperature=self.distill_temperature)) / 2
-
-            print('cassle loss: {} loss_distill: {}'.format(loss.item(), loss_distill.item()))
-
-            return loss + self.distill_lamb * loss_distill
+         
 
         return loss
