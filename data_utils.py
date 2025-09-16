@@ -208,33 +208,27 @@ class SeqSampler(Sampler):
 
     def __iter__(self):
         """Sequential sampler"""
-        # Configure concurrent classes
+        print('==> Using sequential sampler')
         cmin = []
         cmax = []
+        self.n_concurrent_classes = 2
         for i in range(int(self.n_classes / self.n_concurrent_classes)):
-            for _ in range(self.n_concurrent_classes):
+            #for _ in range(self.n_concurrent_classes):
                 cmin.append(i * self.n_concurrent_classes)
-                cmax.append((i + 1) * self.n_concurrent_classes)
-        print('cmin', cmin)
-        print('cmax', cmax)
+                #cmax.append((i + 1) * self.n_concurrent_classes)
+                # Fix for n_concurrent_classes larger than 2
+                cmax.append((i * self.n_concurrent_classes) + self.n_concurrent_classes)
 
-        filter_fn = lambda y: np.logical_and(
-            np.greater_equal(y, cmin[c]), np.less(y, cmax[c]))
-        
-        filter_fn2 = lambda y: np.logical_and(
-            np.greater_equal(y, c), True)
+         
+        print(f'{cmin} {cmax}')
         # Configure sequential class-incremental input
         sample_idx = []
         for c in self.classes:
-            filtered_train_ind = None
-            if c >= len(cmax):
-                filtered_train_ind = filter_fn2(self.labels)
-            else:
-                filtered_train_ind = filter_fn(self.labels)
-            filtered_ind = np.arange(self.labels.shape[0])[filtered_train_ind]
+            filter_fn = lambda y, c=c: np.equal(y, c)
+            filtered_ind = filter_fn(self.labels)
+            filtered_ind = np.arange(self.labels.shape[0])[filtered_ind]
             np.random.shuffle(filtered_ind)
 
-            cls_idx = self.classes.index(c)
             if len(self.train_samples_per_cls) == 1:  # The same length for all classes
                 sample_num = self.train_samples_per_cls[0]
             else:  # Imbalanced class
@@ -242,15 +236,10 @@ class SeqSampler(Sampler):
                     'Length of classes {} does not match length of train ' \
                     'samples per class {}'.format(len(self.classes),
                                                   len(self.train_samples_per_cls))
-                sample_num = self.train_samples_per_cls[cls_idx]
+                sample_num = self.train_samples_per_cls[self.classes.index(c)]
 
             sample_idx.append(filtered_ind.tolist()[:sample_num])
-            if c >= len(cmin):
-                print('Class [{}, {}): {} samples'.format(cls_idx, cls_idx,
-                                                      sample_num))
-            else:
-                print('Class [{}, {}): {} samples'.format(cmin[cls_idx], cmax[cls_idx],
-                                                      sample_num))
+            print('{} samples of #{} cls =>{}'.format(sample_num, self.classes.index(c), c))
 
         # Configure blending class
         if self.blend_ratio > 0.0:
@@ -272,15 +261,23 @@ class SeqSampler(Sampler):
                             tmp = sample_idx[c-1][-ind-1]
                             sample_idx[c-1][-ind-1] = sample_idx[c][ind]
                             sample_idx[c][ind] = tmp
-        for cls in sample_idx:
-                print(len(cls))
+        
         if self.longtailed:
             final_idx,_ = self.long_tailed_redistribution2(sample_idx,self.opt)
             return iter(final_idx)
         else:   
             final_idx = []
-            for sample in sample_idx:
-                final_idx += sample
+            # for sample in sample_idx:
+            #     final_idx += sample
+            if len(cmin) != len(cmax):
+                raise ValueError("cmin and cmax must have the same length.")
+            for i in range(len(cmin)):
+                concurrent = []
+                for j in range(cmin[i], cmax[i]):
+                    if j < len(sample_idx):
+                        concurrent += sample_idx[j]
+                random.shuffle(concurrent)
+                final_idx += concurrent
             return iter(final_idx)
     
     def long_tailed_redistribution2(self,sample_idx,opt):
@@ -346,7 +343,6 @@ def redistribute_samples(sample_idx):
 
 def set_loader(opt, CLOFAI_dataset_dict=None):
     # set seed for reproducing
-     
     random.seed(opt.trial)
     np.random.seed(opt.trial)
     torch.manual_seed(opt.trial)
@@ -376,14 +372,13 @@ def set_loader(opt, CLOFAI_dataset_dict=None):
         transforms.ToTensor(),
         normalize,
     ])
-    
+    opt.dataset = 'CLOFAI'  # TEMP FIX  
     if opt.dataset == 'cifar10':
         train_transform = transforms.Compose([
             transforms.RandomResizedCrop(size=opt.size, scale=(0.2, 1.)),
-            #transforms.RandomResizedCrop(size=(256,256), scale=(0.7, 1.)),
             transforms.RandomHorizontalFlip(),
             transforms.RandomApply([
-                transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)
+            transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)
             ], p=0.8),
             transforms.RandomGrayscale(p=0.2),
             transforms.ToTensor(),
@@ -391,31 +386,25 @@ def set_loader(opt, CLOFAI_dataset_dict=None):
         ])
         train_transform_runtime = transforms.Compose([
             transforms.ToPILImage(),
-            transforms.RandomResizedCrop(size=opt.size, scale=(0.2, 1.)),
-            #transforms.RandomResizedCrop(size=(256,256), scale=(0.7, 1.)),
-            transforms.RandomHorizontalFlip(),
-            transforms.RandomApply([
-                transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)
-            ], p=0.8),
-            transforms.RandomGrayscale(p=0.2),
-            transforms.ToTensor(),
-            normalize,
+            *train_transform.transforms
         ])
          
-        if CLOFAI_dataset_dict is None: 
-            train_dataset = datasets.CIFAR10(root=opt.data_folder,
-                                            transform=ThreeCropTransform(train_transform, opt.size),
-                                            #transform=train_transform,
-                                            download=True,
-                                            train=True)
-            knn_train_dataset = datasets.CIFAR10(root=opt.data_folder,
-                                                train=True,
-                                                transform=val_transform)
-            val_dataset = datasets.CIFAR10(root=opt.data_folder,
-                                        train=False,
-                                        transform=val_transform)
-        else:
-            
+       
+        train_dataset = datasets.CIFAR10(root=opt.data_folder,
+                                        transform=ThreeCropTransform(train_transform, opt.size),
+                                        download=True,
+                                        train=True)
+        knn_train_dataset = datasets.CIFAR10(root=opt.data_folder,
+                                            train=True,
+                                            transform=val_transform)
+        val_dataset = datasets.CIFAR10(root=opt.data_folder,
+                                    train=False,
+                                    transform=val_transform)
+    elif opt.dataset == 'CLOFAI':
+            import datasets as dsts
+            CLOFAI_dataset_dict = dsts.load_dataset("willd98/CLOFAI")
+            from CDDB_dataset import CDDB_dataset
+            CLOFAI_dataset_dict = CDDB_dataset()
             CLOFAI_train_dataset = list(zip(CLOFAI_dataset_dict['train']['image'], CLOFAI_dataset_dict['train']['label'],CLOFAI_dataset_dict['train']['task']))
             CLOFAI_val_dataset = list(zip(CLOFAI_dataset_dict['test']['image'], CLOFAI_dataset_dict['test']['label'],CLOFAI_dataset_dict['test']['task']))
 
@@ -489,6 +478,20 @@ def set_loader(opt, CLOFAI_dataset_dict=None):
                         print('error image:', self.images[idx])
                         raise e
                     return image, label
+            train_transform = transforms.Compose([
+                transforms.RandomResizedCrop(size=opt.size, scale=(0.2, 1.)),
+                transforms.RandomHorizontalFlip(),
+                transforms.RandomApply([
+                transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)
+                ], p=0.8),
+                transforms.RandomGrayscale(p=0.2),
+                transforms.ToTensor(),
+                normalize,
+            ])
+            train_transform_runtime = transforms.Compose([
+                transforms.ToPILImage(),
+                *train_transform.transforms
+            ])
             train_dataset = CustomImageDataset(
                 CLOFAI_train_dataset,
                 transform=ThreeCropTransform(train_transform, opt.size),
@@ -507,18 +510,7 @@ def set_loader(opt, CLOFAI_dataset_dict=None):
                 MERGE_REAL_AS_ONE_CLASS=False,
                 BALANCE_REAL_FAKE_COUNTS=False,
                 UNIFORM_CLASS_COUNTS=100)
-
-
-            # train_dataset = datasets.CIFAR10(root=opt.data_folder,
-            #                                 transform=ThreeCropTransform(train_transform, opt.size),
-            #                                 download=True,
-            #                                 train=True)
-            # knn_train_dataset = datasets.CIFAR10(root=opt.data_folder,
-            #                                     train=True,
-            #                                     transform=val_transform)
-            # val_dataset = datasets.CIFAR10(root=opt.data_folder,
-            #                             train=False,
-            #                             transform=val_transform)
+            
     elif opt.dataset == 'cifar100':
         train_transform = transforms.Compose([
             transforms.RandomResizedCrop(size=opt.size, scale=(0.2, 1.)),
@@ -630,7 +622,7 @@ def set_loader(opt, CLOFAI_dataset_dict=None):
 
     # Configure the a smaller subset as validation dataset
     if torch.is_tensor(train_dataset.targets):
-        labels = train_dataset.targets.detach().cpu()#.numpy()
+        labels = train_dataset.targets.detach().cpu().numpy()
     else:  # targets in cifar10 and cifar100 is a list
         labels = np.array(train_dataset.targets)
     num_labels = len(list(set(labels)))
@@ -657,7 +649,7 @@ def set_loader(opt, CLOFAI_dataset_dict=None):
     else:  # sequential
         train_sampler = SeqSampler(train_dataset, opt.blend_ratio,
                                    opt.n_concurrent_classes,
-                                   opt.train_samples_per_cls,opt)
+                                   opt.train_samples_per_cls,opt.longtailed)
         train_loader = torch.utils.data.DataLoader(
             train_dataset, batch_size=opt.batch_size, shuffle=False,
             num_workers=opt.num_workers, pin_memory=True, sampler=train_sampler)

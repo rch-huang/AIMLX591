@@ -374,7 +374,7 @@ def train(train_loader, test_loader, knntrain_loader,
         # len(images) == 3, two augmented images and one original image
     
 
-        labels_set = set(labels)
+        labels_set = set(labels.tolist())
         for label in labels_set:
             if label not in seen_classes:
                 seen_classes.append(label)
@@ -596,14 +596,8 @@ def main():
     model = load_student_backbone(opt.model,
                                   opt.dataset,
                                   opt.ckpt)
-    import datasets
-    CLOFAI_dataset_dict = datasets.load_dataset("willd98/CLOFAI")
-    from CDDB_dataset import CDDB_dataset
-    CDDB_dataset = None#CDDB_dataset()
-    #CLOFAI_dataset_dict = None
-    #train_loader, test_loader, knntrain_loader, train_transform = set_loader(opt,CLOFAI_dataset_dict)
-    print('Loading dataset: '+str(opt.dataset))
-    train_loader, test_loader, knntrain_loader, train_transform = set_loader(opt,CDDB_dataset)
+     
+    train_loader, test_loader, knntrain_loader, train_transform = set_loader(opt)
 
     
     
