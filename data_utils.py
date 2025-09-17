@@ -187,11 +187,83 @@ class ThreeCropTransform:
     def __call__(self, x):
         return [self.transform(x), self.transform(x), self.notaug_transform(x)]
 
+def SeqSamplerOrder(n_classes,n_concurrent_classes,classes,labels,train_samples_per_cls,blend_ratio):
+        cmin = []
+        cmax = []
+         
+        for i in range(int(n_classes / n_concurrent_classes)):
+           
+                cmin.append(i * n_concurrent_classes)
+                #cmax.append((i + 1) * self.n_concurrent_classes)
+                # Fix for n_concurrent_classes larger than 2
+                cmax.append((i * n_concurrent_classes) + n_concurrent_classes)
 
+         
+        print(f'{cmin} {cmax}')
+        # Configure sequential class-incremental input
+        sample_idx = []
+        for c in classes:
+            filter_fn = lambda y, c=c: np.equal(y, c)
+            filtered_ind = filter_fn(labels)
+            filtered_ind = np.arange(labels.shape[0])[filtered_ind]
+            np.random.shuffle(filtered_ind)
+
+            if len(train_samples_per_cls) == 1:  # The same length for all classes
+                sample_num = train_samples_per_cls[0]
+            else:  # Imbalanced class
+                assert len(train_samples_per_cls) == len(classes), \
+                    'Length of classes {} does not match length of train ' \
+                    'samples per class {}'.format(len(classes),
+                                                  len(train_samples_per_cls))
+                sample_num = train_samples_per_cls[classes.index(c)]
+
+            sample_idx.append(filtered_ind.tolist()[:sample_num])
+            print('{} samples of #{} cls =>{}'.format(sample_num, classes.index(c), c))
+
+        # Configure blending class
+        if blend_ratio > 0.0:
+            for c in range(len(classes)):
+                # Blend examples from the previous class if not the first
+                if c > 0:
+                    blendable_sample_num = \
+                        int(min(len(sample_idx[c]), len(sample_idx[c-1])) * blend_ratio / 2)
+                    # Generate a gradual blend probability
+                    blend_prob = np.arange(0.5, 0.05, -0.45 / blendable_sample_num)
+                    assert blend_prob.size == blendable_sample_num, \
+                        'unmatched sample and probability count'
+
+                    # Exchange with the samples from the end of the previous
+                    # class if satisfying the probability, which decays
+                    # gradually
+                    for ind in range(blendable_sample_num):
+                        if random.random() < blend_prob[ind]:
+                            tmp = sample_idx[c-1][-ind-1]
+                            sample_idx[c-1][-ind-1] = sample_idx[c][ind]
+                            sample_idx[c][ind] = tmp
+        # if longtailed:
+        #     final_idx,_ = self.long_tailed_redistribution2(sample_idx,self.opt)
+        #     return iter(final_idx)
+        if True:   
+            final_idx = []
+            # for sample in sample_idx:
+            #     final_idx += sample
+            if len(cmin) != len(cmax):
+                raise ValueError("cmin and cmax must have the same length.")
+            for i in range(len(cmin)):
+                concurrent = []
+                for j in range(cmin[i], cmax[i]):
+                    if j < len(sample_idx):
+                        concurrent += sample_idx[j]
+                random.shuffle(concurrent)
+                final_idx += concurrent
+        return final_idx
 class SeqSampler(Sampler):
-    def __init__(self, dataset, blend_ratio, n_concurrent_classes,
+    def __init__(self,seqSampler_order,starting_index,ending_index, dataset, blend_ratio, n_concurrent_classes,
                  train_samples_per_cls,longtailed=0.0):
         """data_source is a Subset"""
+        self.seqSampler_order = seqSampler_order
+        self.starting_index = starting_index
+        self.ending_index = ending_index
         self.num_samples = len(dataset)
         self.blend_ratio = blend_ratio
         self.n_concurrent_classes = n_concurrent_classes
@@ -208,77 +280,8 @@ class SeqSampler(Sampler):
 
     def __iter__(self):
         """Sequential sampler"""
-        print('==> Using sequential sampler')
-        cmin = []
-        cmax = []
-        self.n_concurrent_classes = 2
-        for i in range(int(self.n_classes / self.n_concurrent_classes)):
-            #for _ in range(self.n_concurrent_classes):
-                cmin.append(i * self.n_concurrent_classes)
-                #cmax.append((i + 1) * self.n_concurrent_classes)
-                # Fix for n_concurrent_classes larger than 2
-                cmax.append((i * self.n_concurrent_classes) + self.n_concurrent_classes)
-
-         
-        print(f'{cmin} {cmax}')
-        # Configure sequential class-incremental input
-        sample_idx = []
-        for c in self.classes:
-            filter_fn = lambda y, c=c: np.equal(y, c)
-            filtered_ind = filter_fn(self.labels)
-            filtered_ind = np.arange(self.labels.shape[0])[filtered_ind]
-            np.random.shuffle(filtered_ind)
-
-            if len(self.train_samples_per_cls) == 1:  # The same length for all classes
-                sample_num = self.train_samples_per_cls[0]
-            else:  # Imbalanced class
-                assert len(self.train_samples_per_cls) == len(self.classes), \
-                    'Length of classes {} does not match length of train ' \
-                    'samples per class {}'.format(len(self.classes),
-                                                  len(self.train_samples_per_cls))
-                sample_num = self.train_samples_per_cls[self.classes.index(c)]
-
-            sample_idx.append(filtered_ind.tolist()[:sample_num])
-            print('{} samples of #{} cls =>{}'.format(sample_num, self.classes.index(c), c))
-
-        # Configure blending class
-        if self.blend_ratio > 0.0:
-            for c in range(len(self.classes)):
-                # Blend examples from the previous class if not the first
-                if c > 0:
-                    blendable_sample_num = \
-                        int(min(len(sample_idx[c]), len(sample_idx[c-1])) * self.blend_ratio / 2)
-                    # Generate a gradual blend probability
-                    blend_prob = np.arange(0.5, 0.05, -0.45 / blendable_sample_num)
-                    assert blend_prob.size == blendable_sample_num, \
-                        'unmatched sample and probability count'
-
-                    # Exchange with the samples from the end of the previous
-                    # class if satisfying the probability, which decays
-                    # gradually
-                    for ind in range(blendable_sample_num):
-                        if random.random() < blend_prob[ind]:
-                            tmp = sample_idx[c-1][-ind-1]
-                            sample_idx[c-1][-ind-1] = sample_idx[c][ind]
-                            sample_idx[c][ind] = tmp
-        
-        if self.longtailed:
-            final_idx,_ = self.long_tailed_redistribution2(sample_idx,self.opt)
-            return iter(final_idx)
-        else:   
-            final_idx = []
-            # for sample in sample_idx:
-            #     final_idx += sample
-            if len(cmin) != len(cmax):
-                raise ValueError("cmin and cmax must have the same length.")
-            for i in range(len(cmin)):
-                concurrent = []
-                for j in range(cmin[i], cmax[i]):
-                    if j < len(sample_idx):
-                        concurrent += sample_idx[j]
-                random.shuffle(concurrent)
-                final_idx += concurrent
-            return iter(final_idx)
+        print(f'==> Using sequential sampler, from {self.starting_index} to {self.ending_index}')
+        return iter(self.seqSampler_order[self.starting_index:self.ending_index])
     
     def long_tailed_redistribution2(self,sample_idx,opt):
         final_sample_idx = []
@@ -372,7 +375,7 @@ def set_loader(opt, CLOFAI_dataset_dict=None):
         transforms.ToTensor(),
         normalize,
     ])
-    opt.dataset = 'CLOFAI'  # TEMP FIX  
+     
     if opt.dataset == 'cifar10':
         train_transform = transforms.Compose([
             transforms.RandomResizedCrop(size=opt.size, scale=(0.2, 1.)),
@@ -646,13 +649,39 @@ def set_loader(opt, CLOFAI_dataset_dict=None):
         train_loader = torch.utils.data.DataLoader(
             train_subset, batch_size=opt.batch_size, shuffle=True,
             num_workers=opt.num_workers, pin_memory=True, sampler=None)
+        task_loaders = [train_loader]
     else:  # sequential
-        train_sampler = SeqSampler(train_dataset, opt.blend_ratio,
-                                   opt.n_concurrent_classes,
-                                   opt.train_samples_per_cls,opt.longtailed)
-        train_loader = torch.utils.data.DataLoader(
+        if torch.is_tensor(train_dataset.targets):
+            labels = train_dataset.targets.detach().cpu().numpy()
+        else:  # targets in cifar10 and cifar100 is a list
+            labels = np.array(train_dataset.targets)
+        classes = list(set(labels))
+        n_classes = len(classes)
+        task_splitting_indices = [0]
+        for i in range(n_classes//opt.n_concurrent_classes):
+            last_index = task_splitting_indices[-1]
+            for j in range(opt.n_concurrent_classes):
+                if len(opt.train_samples_per_cls) == 1:
+                    last_index = last_index + opt.train_samples_per_cls[0]
+                else:
+                    last_index = last_index + opt.train_samples_per_cls[i*opt.n_concurrent_classes+j]
+            task_splitting_indices.append(last_index)
+        print('Task splitting indices:', task_splitting_indices)
+        seqSamplerOrder = SeqSamplerOrder(n_classes, opt.n_concurrent_classes,classes,labels,opt.train_samples_per_cls,opt.blend_ratio)
+        task_loaders = [
+            torch.utils.data.DataLoader(
             train_dataset, batch_size=opt.batch_size, shuffle=False,
-            num_workers=opt.num_workers, pin_memory=True, sampler=train_sampler)
+            num_workers=opt.num_workers, pin_memory=True, 
+            sampler=SeqSampler(
+                seqSamplerOrder,task_splitting_indices[i],task_splitting_indices[i+1],
+                train_dataset, opt.blend_ratio,
+                opt.n_concurrent_classes,
+                opt.train_samples_per_cls,opt.longtailed
+                )
+            )
+            for i in range(len(task_splitting_indices)-1)
+        ]
+     
 
     # Create validation loader
     val_subset_len = num_labels * opt.test_samples_per_cls
@@ -673,8 +702,8 @@ def set_loader(opt, CLOFAI_dataset_dict=None):
     else:
         knn_train_loader = None
 
-    print('Training samples: ', len(train_loader) * opt.batch_size)
+    #print('Training samples: ', len(train_loader) * opt.batch_size)
     print('Testing samples: ', len(val_loader) * opt.val_batch_size)
     print('kNN training samples: ', len(knn_train_loader) * opt.val_batch_size)
 
-    return train_loader, val_loader, knn_train_loader, train_transform_runtime
+    return task_loaders, val_loader, knn_train_loader, train_transform_runtime

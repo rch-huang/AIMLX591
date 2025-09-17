@@ -212,12 +212,11 @@ def parse_option():
 
 
 def train_step(images, labels, models, criterions, optimizer,
-               meters, opt, mem, train_transform,index_of_steps_since_beginning):
+               meters, opt, mem, train_transform):
     """One gradient descent step"""
     model, past_model = models
     criterion, criterion_reg = criterions
-    losses_stream, losses_contrast, losses_distill, \
-        pos_pairs, forward_time, loss_time, pair_comp_time = meters
+    losses_stream, losses_contrast, losses_distill = meters
 
     # load memory samples
     if opt.mem_samples>0:
@@ -266,7 +265,6 @@ def train_step(images, labels, models, criterions, optimizer,
     bsz = feed_images_0.shape[0]
     
     model.train()
-    start = time.time()
 
     loss_distill = .0
     if opt.distill_enabled == 'none':
@@ -278,19 +276,16 @@ def train_step(images, labels, models, criterions, optimizer,
         elif opt.criterion in ['simclr', 'cka', 'barlowtwins', 'byol', 'vicreg', 'simsiam']:
             loss_contrast = criterion(model, model, feed_images_0, feed_images_1)
 
-        # print(loss_contrast)
-
     elif opt.distill_enabled == 'scale':
         if opt.lifelong_id == 3 or opt.lifelong_id == 4:
             f0_logits, loss_distill = criterion_reg(model, past_model,
                                                 feed_images_0)
             losses_distill.update(loss_distill.item(), bsz)
-            pair_comp_time.update(time.time() - start)
-
+ 
         #contrast_mask = similarity_mask_new(opt.batch_size, f0_logits, opt, pos_pairs)
         feed_images_all = torch.cat([feed_images_0, feed_images_1], dim=0)
         features_all = model(feed_images_all)
-        contrast_mask = similarity_mask_old(features_all, bsz, opt, pos_pairs)
+        contrast_mask = similarity_mask_old(features_all, bsz, opt)
         loss_contrast = criterion(model, model, feed_images_0, feed_images_1,
                                   mask=contrast_mask)
 
@@ -313,13 +308,12 @@ def train_step(images, labels, models, criterions, optimizer,
 
 
     losses_contrast.update(loss_contrast.item(), bsz)
-    loss_time.update(time.time() - start)
 
     if train_step.distill_power <= 0.0 and loss_distill > 0.0:
         train_step.distill_power = losses_contrast.avg * opt.distill_power / losses_distill.avg
 
     loss = loss_contrast + train_step.distill_power * loss_distill
-    #print("loss_contrast / loss_distill = "+str(loss_contrast/(train_step.distill_power * loss_distill)))
+    
     losses_stream.update(loss.item(), bsz)
 
     # SGD
@@ -341,154 +335,117 @@ def convert_types(obj):
                 return int(obj)
             raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
         
-def train(train_loader, test_loader, knntrain_loader,
-          train_transform, model, criterions, optimizer, epoch,
-          opt, mem, logger, task_list):
-    """training of one epoch on single-pass of data"""
-    clofai_prefix = opt.clofai_prefix
-    batch_time = AverageMeter()
-    data_time = AverageMeter()
-    forward_time = AverageMeter()
-    loss_time = AverageMeter()
-    pair_comp_time = AverageMeter()
-    mem_update_time = AverageMeter()
+def train(task_loaders, test_loader, knntrain_loader,
+          train_transform, model, criterions, optimizer,
+          opt, mem, logger,epoch=1):
+    
+    
+    
     losses_stream = AverageMeter()
     losses_contrast = AverageMeter()
     losses_distill = AverageMeter()
     pos_pairs_stream = AverageMeter()
-    meters = [losses_stream, losses_contrast, losses_distill,
-              pos_pairs_stream, forward_time, loss_time, pair_comp_time]
+    meters = [losses_stream, losses_contrast, losses_distill]
 
-    batches_per_epoch = len(train_loader)
-    steps_per_epoch_stream = opt.steps_per_batch_stream * batches_per_epoch
-    cur_stream_step = (epoch - 1) * steps_per_epoch_stream
-
-    # Set validation frequency
-    val_freq = np.floor(len(train_loader) / VAL_CNT).astype('int')
-    #print('Validation frequency: {}'.format(val_freq))
-
-    end = time.time()
-    #opt.stats = {"times_cls":{},"times_mem_cls":{},"acc_knn_training_set":{},"acc_val_set":{},"spectral_acc":{}}
-    seen_classes = []#[0,1,2,3,4,5,6,7,8,9]
-    for idx, (images, labels) in enumerate(train_loader):
-        # len(images) == 3, two augmented images and one original image
-    
-
-        labels_set = set(labels.tolist())
-        for label in labels_set:
-            if label not in seen_classes:
-                seen_classes.append(label)
-                #images[labels.index(label)].save(os.path.join('./',clofai_prefix+'first_appear_cls_'+str(label)+'.jpg'))
-
-        np_labels = np.array(labels)
-        cls_to_distinguish = [cls for cls in set(labels)]
-        
-        data_time.update(time.time() - end)
-
-        
-        # test - plot t-SNE
-        if False:
-        #if idx % 20 ==0:#val_freq*10 == 0:
-            print("\n\n\n\n\n #epoch#"+str(epoch))
-            validate(test_loader, knntrain_loader, model, optimizer,
-                     opt, mem, cur_stream_step, epoch, logger, task_list,idx+(epoch-1)*len(train_loader),seen_classes)
-            print("\n\n\n\n\n")
-
-        # record a snapshot of the model as past model
-        past_model = copy.deepcopy(model)
-        past_model.eval()
-         
-
-        models = [model, past_model]
-        # compute loss
-        for _ in range(opt.steps_per_batch_stream):
-            
-            index_of_steps_since_beginning = _+opt.steps_per_batch_stream*idx+(epoch-1)*len(train_loader)
-            if True:
-                opt.stats["times_cls"][index_of_steps_since_beginning] = [np.sum(np_labels==i) for i in range(dataset_num_classes[opt.dataset])]
-                opt.stats["times_mem_cls"][index_of_steps_since_beginning] = [0 for i in range(dataset_num_classes[opt.dataset])]
-                if _ == 0:
-                    print(str(index_of_steps_since_beginning) +" cls "+str(opt.stats["times_cls"][index_of_steps_since_beginning]))
-                    with open(os.path.join('./',clofai_prefix+'cls.csv'), 'a+') as f:
-                        f.write(f"{','.join(map(str, opt.stats['times_cls'][index_of_steps_since_beginning]))}\n") 
-            # if isinstance(images, list):
-            #     imagess = torch.stack(images)  # Convert list of images to a tensor
-            # current_batch_size = 1024
-            # random_indices = torch.randperm(current_batch_size)[:512]
-            # subset_images = imagess[:, random_indices, :, :] 
-            # subset_labels = labels[random_indices]
-            past_model = copy.deepcopy(model)
-            past_model.eval()
-            models = [model, model]
-            
-            # Trigger one gradient descent step
-            mem_true_labels = train_step(images, labels, models, criterions,
-                       optimizer, meters, opt, mem, train_transform,index_of_steps_since_beginning)
-            if mem_true_labels is not None:
-                for mem_true_label in mem_true_labels:
-                        opt.stats["times_mem_cls"][index_of_steps_since_beginning][mem_true_label] += 1 
-                print(str(index_of_steps_since_beginning) +" mem "+str(opt.stats["times_mem_cls"][index_of_steps_since_beginning])) 
-
-                if _ == 0:
-                    with open(os.path.join('./',clofai_prefix+'cls_mem.csv'), 'a+') as f:
-                        f.write(f"{','.join(map(str, opt.stats['times_mem_cls'][index_of_steps_since_beginning]))}\n") 
-            if  _== opt.steps_per_batch_stream-1:
-                validate(test_loader, knntrain_loader, model, optimizer,
-                     opt, mem, cur_stream_step, epoch, logger, task_list,index_of_steps_since_beginning,cls_to_distinguish,seen_classes,clofai_prefix=clofai_prefix)
-            # tensorboard logger
-            logger.log_value('learning_rate',
-                             optimizer.param_groups[0]['lr'],
-                             cur_stream_step)
-            logger.log_value('loss',
-                             losses_stream.avg,
-                             cur_stream_step)
-            logger.log_value('loss_contrast',
-                             losses_contrast.avg,
-                             cur_stream_step)
-            logger.log_value('loss_distill',
-                             losses_distill.avg * train_step.distill_power,
-                             cur_stream_step)
-            logger.log_value('pos_pair_stream', pos_pairs_stream.avg,
-                             cur_stream_step)
-            cur_stream_step += 1
-
-            # print info
-            if cur_stream_step % 10 == 0:
-                print('Train stream: [{step_idx}/{0}/{1}]\t'
-                      'loss {2}\t'
-                      'loss_contrast {3}\t'
-                      'loss_distill {4}\t'
-                      'pos pairs {pos_pair.val:.3f} ({pos_pair.avg:.3f})'.format(
-                    idx + 1, len(train_loader),
-                    losses_stream.avg,
-                    losses_contrast.avg,
-                    losses_distill.avg * train_step.distill_power,
-                    step_idx=_,
-                    pos_pair=pos_pairs_stream))
-                sys.stdout.flush()
-
-        # update memory
-        mem_start = time.time()
-        if opt.mem_w_labels:
-            mem.update_w_labels(images[2], labels)
-            mem_end = time.time()
-        else:
-            all_embeddings, all_true_labels, select_indexes = \
-                mem.update_wo_labels(images[2], labels, model)
-            mem_end = time.time()
-            if opt.plot and idx % val_freq == 0:
-                print('plot mem select')
-                plot_mem_select(all_embeddings, all_true_labels, select_indexes, opt,
-                                epoch, cur_stream_step)
-
-        # measure elapsed time
-        mem_update_time.update(mem_end - mem_start)
-        batch_time.update(time.time() - end)
-        end = time.time()
-        filename = 'TestID_'+str(opt.testid)+'#seed_'+str(opt.trial)+'#stats_'+opt.logfilename+'.json'
-        with open(filename, 'w') as json_file:
-            json.dump(opt.stats, json_file, indent=4,default=convert_types)
      
+     
+  
+    seen_classes = [] 
+     
+    step_since_beginning = 0
+    opt.epochs = 200
+    for train_loader in task_loaders:
+        for epoch in range(opt.epochs):
+            print('Epoch: [{}/{}]'.format(epoch, opt.epochs) + ' Step since beginning: {}'.format(step_since_beginning))
+            for idx, (images, labels) in enumerate(train_loader):
+                # len(images) == 3, two augmented images and one original image
+
+
+                labels_set = set(labels.tolist())
+                for label in labels_set:
+                    if label not in seen_classes:
+                        seen_classes.append(label)
+                if epoch == 0:
+                    opt.stats["times_cls"][step_since_beginning] = {}
+                    for label in labels:
+                        _label = label.item()
+                        if _label not in opt.stats["times_cls"][step_since_beginning]:
+                            opt.stats["times_cls"][step_since_beginning][_label] = 0
+                        opt.stats["times_cls"][step_since_beginning][_label] += 1 
+                    print(str(step_since_beginning) +" cls "+str(opt.stats["times_cls"][step_since_beginning])) 
+                     
+                 
+                # compute loss
+                for step in range(opt.steps_per_batch_stream):
+                    
+                    
+                     
+                    past_model = copy.deepcopy(model)
+                    past_model.eval()
+                    models = [model, model]
+                    
+                     
+                    mem_true_labels = train_step(images, labels, models, criterions,
+                            optimizer, meters, opt, mem, train_transform)
+                    if mem_true_labels is not None and step == 0 and epoch == 0:
+                        opt.stats["times_mem_cls"][step_since_beginning] = {}
+                        for mem_true_label in mem_true_labels:
+                            _mem_true_label = mem_true_label.item()
+                            if _mem_true_label not in opt.stats["times_mem_cls"][step_since_beginning]:
+                                opt.stats["times_mem_cls"][step_since_beginning][_mem_true_label] = 0
+                            opt.stats["times_mem_cls"][step_since_beginning][_mem_true_label] += 1 
+                        print(str(step_since_beginning) +" mem "+str(opt.stats["times_mem_cls"][step_since_beginning])) 
+
+                         
+                    if step == opt.steps_per_batch_stream-1 and epoch == opt.epochs-1:
+                        validate(test_loader, knntrain_loader, model, optimizer,
+                            opt, seen_classes)
+                    
+                    logger.log_value('learning_rate',
+                                    optimizer.param_groups[0]['lr'],
+                                    step_since_beginning)
+                    logger.log_value('loss',
+                                    losses_stream.avg,
+                                    step_since_beginning)
+                    logger.log_value('loss_contrast',
+                                    losses_contrast.avg,
+                                    step_since_beginning)
+                    logger.log_value('loss_distill',
+                                    losses_distill.avg * train_step.distill_power,
+                                    step_since_beginning)
+                    logger.log_value('pos_pair_stream', pos_pairs_stream.avg,
+                                    step_since_beginning)
+                    step_since_beginning += 1
+
+                    # print info
+                    if step_since_beginning % 10 == 0 and False:
+                        print('Train stream: [{step_idx}/{0}/{1}]\t'
+                            'loss {2}\t'
+                            'loss_contrast {3}\t'
+                            'loss_distill {4}\t'
+                            'pos pairs {pos_pair.val:.3f} ({pos_pair.avg:.3f})'.format(
+                            idx + 1, len(train_loader),
+                            losses_stream.avg,
+                            losses_contrast.avg,
+                            losses_distill.avg * train_step.distill_power,
+                            step_idx=step_since_beginning,
+                            pos_pair=pos_pairs_stream))
+                        sys.stdout.flush()
+
+                if epoch != 0:
+                    # Skip memory update for subsequent epochs
+                    continue
+
+                if opt.mem_w_labels:
+                    mem.update_w_labels(images[2], labels)
+                   
+                else:
+                    all_embeddings, all_true_labels, select_indexes = \
+                        mem.update_wo_labels(images[2], labels, model)
+                    
+
+                
+            
 def normalize_embeddings(embeddings):
     norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
 
@@ -498,23 +455,15 @@ def normalize_embeddings(embeddings):
     
     return normalized_embeddings
 def validate(test_loader, knn_train_loader, model, optimizer,
-             opt, mem, cur_step, epoch, logger, task_list,idx_training_step,cls_to_distinguish=[],seen_classes=[],clofai_prefix=''):
-    """validation, evaluate k-means clustering accuracy and plot t-SNE"""
+             opt,seen_classes=[]):
     model.eval()
-    test_labels, val_labels, knn_labels = [], [], []
-    test_embeddings, val_embeddings, knn_embeddings = None, None, None
+    test_labels, knn_labels = [], []
+    test_embeddings,   knn_embeddings = None, None 
 
-    # kNN training loader
-    seen_classes_torch = torch.tensor(seen_classes)
-    for idx, (images, labels) in enumerate(tqdm(knn_train_loader, desc="knn training")):
-        if False:
-            mask = torch.isin(labels, seen_classes_torch)
-            images = images[mask]
-            labels = labels[mask]
-        
+    
+    for _, (images, labels) in enumerate(tqdm(knn_train_loader, desc="knn training")):
         if torch.cuda.is_available():
             images = images.cuda(non_blocking=True)
-
         embeddings = model(images).detach().cpu().numpy()
         if opt.normalize_embeddings == 1:
             embeddings = normalize_embeddings(embeddings)
@@ -525,26 +474,10 @@ def validate(test_loader, knn_train_loader, model, optimizer,
         knn_labels += labels.detach().tolist()
     knn_labels = np.array(knn_labels).astype(int)
 
-    os.makedirs("test_loader",exist_ok=True)
-    # Test loader
+    
     for idx, (images, labels) in enumerate(tqdm(test_loader, desc='test')):
-        if False:
-            mask = torch.isin(labels, seen_classes_torch)
-            images = images[mask]
-            labels = labels[mask]
-        if False:
-            for i in range(images.size(0)):  # Loop over the batch
-                image = transforms.ToPILImage()(images[i])
-                label = labels[i].item()
-                filename = f"test_loader/img_{idx * images.size(0) + i}_label_{label}.jpg"
-                image.save(filename)
-
-
         if torch.cuda.is_available():
             images = images.cuda(non_blocking=True)
-            # labels = labels.cuda(non_blocking=True)
-
-        # forward prediction
         embeddings = model(images).detach().cpu().numpy()
         if test_embeddings is None:
             test_embeddings = embeddings
@@ -552,32 +485,10 @@ def validate(test_loader, knn_train_loader, model, optimizer,
             test_embeddings = np.concatenate((test_embeddings, embeddings), axis=0)
         test_labels += labels.detach().tolist()
     test_labels = np.array(test_labels).astype(int)
-    print('number of samples per class in test set: {}'.format(
-        [np.sum(test_labels == i) for i in range(len(np.unique(test_labels)))])   )
     
-    #print(f"NumberOfSamples per TestClass {[np.sum(test_labels==i) for i in range(dataset_num_classes[opt.dataset])]}")
-    # Unsupervised clustering
-    #cluster_eval(test_embeddings, test_labels, opt, mem, cur_step, epoch, logger,idx_training_step)
-
-    # kNN classification
     knn_eval(test_embeddings, test_labels, knn_embeddings, knn_labels,
-             opt, mem, cur_step, epoch, logger,idx_training_step,cls_to_distinguish,seen_classes,clofai_prefix)
-    #knn_task_eval(test_embeddings, test_labels, knn_embeddings, knn_labels,
-    #              opt, mem, cur_step, epoch, logger, task_list)
-
-    # Memory plot
-    if opt.plot and opt.mem_size > 0 and cur_step > 0:
-        plot_mem(mem, model, opt, epoch, cur_step)
-
-    # Save the current embeddings
-    # np.save(os.path.join(opt.save_folder, 'test_embeddings.npy'), test_embeddings)
-    # np.save(os.path.join(opt.save_folder, 'test_labels.npy'), test_labels)
-
-    # Save the current model
-    if SAVE_MODEL and False:
-        save_file = os.path.join(opt.save_folder, '{}_{}.pth'.format(epoch, cur_step))
-        save_model(model, optimizer, opt, opt.epochs, save_file)
-
+             opt, seen_classes )
+     
 
 def main():
     opt = parse_option()
@@ -597,7 +508,7 @@ def main():
                                   opt.dataset,
                                   opt.ckpt)
      
-    train_loader, test_loader, knntrain_loader, train_transform = set_loader(opt)
+    task_loaders, test_loader, knntrain_loader, train_transform = set_loader(opt)
 
     
     
@@ -618,16 +529,8 @@ def main():
     logger = tb_logger.Logger(logdir=opt.tb_folder, flush_secs=2)
     tb_logger.configure("tb_test", flush_secs=5)
     tb_logger.log_value('test_property',1,0)
-    batches_per_epoch = len(train_loader)
-    steps_per_epoch_stream = opt.steps_per_batch_stream * batches_per_epoch
-
-    # set task list
-    #all_labels = []
-    #for idx, (images, labels) in enumerate(val_loader):
-    #    all_labels += labels.detach().tolist()
-    #all_labels = np.sort(np.unique(np.array(all_labels).astype(int)))
-    task_list = np.reshape(np.arange(dataset_num_classes[opt.dataset]),
-                           (-1, dataset_num_classes[opt.dataset])).tolist()
+  
+     
     opt.stats = {
         "times_cls":{},
         "times_mem_cls":{},
@@ -642,40 +545,15 @@ def main():
         "balanced_accuracy":{},
         "forget":[{"delta":0.0,"idx":0} for i in range(10)]
         }
-    for k in range(10):
-        opt.stats["acc_distinguish_"+str(k)]={}
-  
-    # training routine
-    for epoch in range(1, opt.epochs + 1):
-        # adjust_learning_rate(opt, optimizer, epoch)
-        set_constant_learning_rate(opt.learning_rate_stream, optimizer)
+    
+     
+    set_constant_learning_rate(opt.learning_rate_stream, optimizer)
 
-        # train for one epoch
-        time1 = time.time()
-        train(train_loader, test_loader, knntrain_loader,
-              train_transform, model, criterions, optimizer, epoch,
-              opt, mem, logger, task_list)
-        time2 = time.time()
-        #print('epoch {}, total time {:.2f}'.format(epoch, time2 - time1))
-
-        # Plot t-SNE
-        cur_stream_step = epoch * steps_per_epoch_stream
-        opt.plot = True
-        #print('Test student model')
-        #validate(test_loader, knntrain_loader, model, optimizer, opt,
-        #         mem, cur_stream_step, epoch, logger, task_list,-1)
-        opt.plot = False
-
-    #save_file = os.path.join(opt.save_folder, 'last.pth')
-    #save_model(model, optimizer, opt, opt.epochs, save_file)
-    filename = 'stats_'+opt.logfilename+'.json'
-    if False:
-        import plot2
-        import plot4
-        plot2.plotting_acc(filename,None)
-        cc = [[0,1],[2,3],[4,5],[6,7],[8,9]]
-        for c in cc:
-            plot4.plotting_acc(filename,None,c[0],c[1])
+    
+    train(task_loaders, test_loader, knntrain_loader,
+          train_transform, model, criterions, optimizer,
+          opt, mem, logger)
+        
 
 if __name__ == '__main__':
     main()

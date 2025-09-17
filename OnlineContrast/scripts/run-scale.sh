@@ -103,7 +103,7 @@ if [ $2 = "cifar10" ] ; then
 
     if [ $3 = "seq-cc" ]; then
       python3 -m pdb  main_supcon.py --criterion $1 --lifelong_id ${10} --dataset $2 --model resnet18 --training_data_type class_iid --n_concurrent_classes 2 \
-        --batch_size 1024 --mask_memory 0 --mem_samples $mem_samples --mem_size $mem_size \
+        --batch_size 512 --mask_memory 0 --mem_samples $mem_samples --mem_size $mem_size \
         --val_batch_size 128 --num_workers 8 --steps_per_batch_stream $5 --epochs $epochs \
         --learning_rate_stream $lr --temp_cont 0.1 --simil tSNE --temp_tSNE 0.1 --thres_ratio $thres_ratio --distill_power $distill_power \
         --mem_update_type rdn --mem_cluster_type $cluster_type --mem_max_new_ratio 0.1 --mem_max_classes 10 \

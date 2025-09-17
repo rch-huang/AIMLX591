@@ -229,13 +229,12 @@ def similarity_mask_new(batch_size, cur_digits, opt, pos_pairs):
     return contrast_mask
 
 
-def similarity_mask_old(feat_all, bsz, opt, pos_pairs):
+def similarity_mask_old(feat_all, bsz, opt):
     """Calculate the pairwise similarity and the mask for contrastive learning
     Args:
         feat_all: all hidden features of shape [n_views * bsz, ...].
         bsz: int, batch size of input data (stacked streaming and memory samples)
         opt: arguments
-        pos_pairs: averagemeter recording number of positive pairs
     Returns:
         contrast_mask: mask of shape [bsz, bsz]
     """
@@ -314,8 +313,7 @@ def similarity_mask_old(feat_all, bsz, opt, pos_pairs):
             torch.kthvalue(simil_mat_avg[:opt.batch_size, :opt.batch_size],
                            int(opt.simil_thres), 0, True)[0]] = 1
 
-    pos_pairs.update(contrast_mask.sum().item() / opt.batch_size, bsz)
-    # print('Avg num of positive samples: {}'.format(pos_pairs.val))
+    
 
     return contrast_mask
 
